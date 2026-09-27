@@ -57,6 +57,30 @@ function goBack() {
 
 // ===== Обработчики =====
 document.addEventListener('DOMContentLoaded', () => {
+  
+  // Заменяем символ ₽ на SVG-иконку
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) {
+    if (walker.currentNode.nodeValue.includes('₽')) nodes.push(walker.currentNode);
+  }
+  nodes.forEach(node => {
+    const parts = node.nodeValue.split('₽');
+    const frag = document.createDocumentFragment();
+    parts.forEach((part, i) => {
+      frag.appendChild(document.createTextNode(part));
+      if (i < parts.length - 1) {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', 'rub-icon');
+        const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        use.setAttribute('href', '#i-rub');
+        svg.appendChild(use);
+        frag.appendChild(svg);
+      }
+    });
+    node.parentNode.replaceChild(frag, node);
+  });
+  
   // Нижняя навигация
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => navigate(btn.dataset.nav));

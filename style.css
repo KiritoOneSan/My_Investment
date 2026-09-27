@@ -391,3 +391,12 @@ h2 {
 
 /* Убираем старый размер для .nav-icon, если он был задан */
 .nav-icon { font-size: 0; }
+
+/* SVG-значок рубля */
+.rub-icon {
+  display: inline-block;
+  width: 0.55em;
+  height: 0.75em;
+  vertical-align: -0.05em;
+  margin-left: 0.1em;
+}
