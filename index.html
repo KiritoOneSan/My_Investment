@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0d6e4f">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css">
+  <title>Инвестиции</title>
+</head>
+<body>
+
+  <!-- ВЕРХНЯЯ ПАНЕЛЬ -->
+  <header id="appBar">
+    <button id="backBtn" class="hidden">←</button>
+    <h1 id="appBarTitle">Сводка</h1>
+  </header>
+
+  <!-- ОСНОВНОЙ КОНТЕНТ -->
+  <main id="content">
+
+    <!-- ЭКРАН: Сводка -->
+    <section id="screen-summary" class="screen active">
+      <div class="card big-value">
+        <div class="label">Стоимость портфеля</div>
+        <div class="value">1 030 450,17 ₽</div>
+        <div class="change positive">+12 345,67 ₽ (+1,21%)</div>
+      </div>
+
+      <div class="currency-grid">
+        <div class="currency-cell">
+          <div class="currency-label">RUB</div>
+          <div class="currency-value">951 437,56</div>
+        </div>
+        <div class="currency-cell">
+          <div class="currency-label">CNY</div>
+          <div class="currency-value">515,82</div>
+        </div>
+        <div class="currency-cell">
+          <div class="currency-label">USD</div>
+          <div class="currency-value">202,79</div>
+        </div>
+      </div>
+
+      <h2>Доходы за месяц</h2>
+      <div class="tiles-grid">
+        <div class="tile"><div class="tile-label">Купоны</div><div class="tile-value">11 223,48 ₽</div></div>
+        <div class="tile"><div class="tile-label">Дивиденды</div><div class="tile-value">2 517,09 ₽</div></div>
+        <div class="tile"><div class="tile-label">P&L</div><div class="tile-value positive">+5 234 ₽</div></div>
+        <div class="tile"><div class="tile-label">Издержки</div><div class="tile-value negative">−49,21 ₽</div></div>
+      </div>
+
+      <h2>Выплаты в этом месяце</h2>
+      <div class="card">
+        <div class="payments-row">
+          <span>Фиксированные</span>
+          <span>24 шт · 12 345 ₽</span>
+        </div>
+        <div class="payments-row">
+          <span>Плавающие</span>
+          <span>5 шт · —</span>
+        </div>
+      </div>
+
+      <div class="notice">По 3 позициям нет данных о покупке</div>
+    </section>
+
+    <!-- ЭКРАН: Портфели -->
+    <section id="screen-portfolios" class="screen">
+      <div class="toggle-row">
+        <button class="toggle active" data-mode="combined">Сводно</button>
+        <button class="toggle" data-mode="by-account">По счетам</button>
+      </div>
+
+      <h2>Деньги</h2>
+      <div class="list">
+        <div class="list-item"><span>RUB</span><span>73 288,04 ₽</span></div>
+        <div class="list-item"><span>CNY</span><span>515,82 CNY</span></div>
+      </div>
+
+      <h2>Акции</h2>
+      <div class="list">
+        <div class="list-item"><span>Сбербанк ао</span><span>12 198 ₽</span></div>
+        <div class="list-item"><span>Газпром а.о.</span><span>14 708,40 ₽</span></div>
+        <div class="list-item"><span>МТС-ао</span><span>12 585 ₽</span></div>
+      </div>
+
+      <h2>Облигации</h2>
+      <div class="list">
+        <div class="list-item"><span>Атомэнп05</span><span>55 886,78 ₽</span></div>
+        <div class="list-item"><span>РЖД 1Р38R</span><span>40 164,32 ₽</span></div>
+      </div>
+
+      <h2>Еврооблигации</h2>
+      <div class="list">
+        <div class="list-item"><span>МЕТАЛИН1P2</span><span>43 054,28 ₽</span></div>
+      </div>
+
+      <h2>Паи</h2>
+      <div class="list">
+        <div class="list-item"><span>Рентал ПРО</span><span>60 474 ₽</span></div>
+      </div>
+    </section>
+
+    <!-- ЭКРАН: Ещё -->
+    <section id="screen-more" class="screen">
+      <div class="menu">
+        <button class="menu-item" data-nav="graphs">📈 Графики</button>
+        <button class="menu-item" data-nav="import">📥 Импорт</button>
+        <button class="menu-item" data-nav="taxes">💰 Налоги</button>
+        <button class="menu-item" data-nav="trades">📊 Сделки</button>
+        <button class="menu-item" data-nav="operations">📋 Операции</button>
+        <button class="menu-item" data-nav="settings">⚙️ Настройки</button>
+      </div>
+    </section>
+
+    <!-- ВНУТРЕННИЕ ЭКРАНЫ -->
+    <section id="screen-graphs" class="screen">
+      <h2>Графики</h2>
+      <div class="card placeholder">Здесь будут графики</div>
+    </section>
+
+    <section id="screen-import" class="screen">
+      <h2>Импорт отчёта</h2>
+      <button class="primary-btn">Выбрать файл .xlsx</button>
+      <div class="card placeholder">Предпросмотр появится здесь</div>
+    </section>
+
+    <section id="screen-taxes" class="screen">
+      <h2>Налоги</h2>
+      <div class="card placeholder">Начислено / Уплачено / К уплате</div>
+    </section>
+
+    <section id="screen-trades" class="screen">
+      <h2>Сделки</h2>
+      <div class="card placeholder">Журнал сделок</div>
+    </section>
+
+    <section id="screen-operations" class="screen">
+      <h2>Операции</h2>
+      <div class="card placeholder">Журнал денежных операций</div>
+    </section>
+
+    <section id="screen-settings" class="screen">
+      <h2>Настройки</h2>
+      <div class="card">
+        <div class="settings-row">
+          <span>PIN-код</span>
+          <button class="small-btn">Установить</button>
+        </div>
+        <div class="settings-row">
+          <span>Срок жизни логов</span>
+          <span>1 день</span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- НИЖНЯЯ НАВИГАЦИЯ -->
+  <nav id="bottomNav">
+    <button class="nav-btn active" data-nav="summary">
+      <span class="nav-icon">📊</span>
+      <span class="nav-label">Сводка</span>
+    </button>
+    <button class="nav-btn" data-nav="portfolios">
+      <span class="nav-icon">💼</span>
+      <span class="nav-label">Портфели</span>
+    </button>
+    <button class="nav-btn" data-nav="more">
+      <span class="nav-icon">☰</span>
+      <span class="nav-label">Ещё</span>
+    </button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>

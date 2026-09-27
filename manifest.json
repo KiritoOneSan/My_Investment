@@ -1,0 +1,10 @@
+{
+  "name": "Учёт инвестиций",
+  "short_name": "Инвестиции",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6f8",
+  "theme_color": "#0d6e4f",
+  "icons": []
+}
