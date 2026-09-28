@@ -55,9 +55,31 @@ function goBack() {
   }
 }
 
+// ===== Инициализация базы данных =====
+function setDbStatus(text, isError = false) {
+  const el = document.getElementById('dbStatus');
+  if (el) {
+    el.textContent = text;
+    el.style.color = isError ? 'var(--negative)' : 'var(--positive)';
+  }
+}
+
+async function initDatabase() {
+  try {
+    setDbStatus('Инициализация...');
+    const msg = await window.db.init();
+    const accounts = await window.db.select('SELECT * FROM accounts');
+    console.log('[db] Готово. Счетов в базе:', accounts.length);
+    setDbStatus('OK · счетов: ' + accounts.length);
+  } catch (err) {
+    console.error('[db] Ошибка:', err);
+    setDbStatus('Ошибка: ' + err.message, true);
+  }
+}
+
 // ===== Обработчики =====
 document.addEventListener('DOMContentLoaded', () => {
-  
+
   // Заменяем символ ₽ на SVG-иконку
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   const nodes = [];
@@ -80,7 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     node.parentNode.replaceChild(frag, node);
   });
-  
+
   // Нижняя навигация
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => navigate(btn.dataset.nav));
@@ -105,6 +127,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Стартовый экран
   navigate('summary');
+
+  // Инициализация базы
+  initDatabase();
 });
 
 // ===== Обработка системной кнопки "Назад" на Android =====
