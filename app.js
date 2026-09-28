@@ -18,31 +18,25 @@ function navigate(screenKey, addToHistory = true) {
   const screen = screens[screenKey];
   if (!screen) return;
 
-  // Скрыть все экраны, показать нужный
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(screen.el).classList.add('active');
 
-  // Заголовок
   document.getElementById('appBarTitle').textContent = screen.title;
 
-  // Кнопка "Назад"
   const backBtn = document.getElementById('backBtn');
   if (screen.isRoot) {
     backBtn.classList.add('hidden');
-    history.length = 0; // Сброс истории при переходе на корневой экран
+    history.length = 0;
   } else {
     backBtn.classList.remove('hidden');
     if (addToHistory) history.push(currentScreen);
   }
 
-  // Активная вкладка нижней навигации
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.nav === screenKey);
   });
 
-  // Прокрутить контент наверх
   document.getElementById('content').scrollTop = 0;
-
   currentScreen = screenKey;
 }
 
@@ -51,7 +45,7 @@ function goBack() {
   if (prev) {
     navigate(prev, false);
   } else {
-    navigate('more', false); // fallback
+    navigate('more', false);
   }
 }
 
@@ -74,6 +68,115 @@ async function initDatabase() {
   } catch (err) {
     console.error('[db] Ошибка:', err);
     setDbStatus('Ошибка: ' + err.message, true);
+  }
+}
+
+// ===== Импорт .xlsx — Этап 3.1 =====
+
+// Определение типа отчёта по имени листа и содержимому
+function detectReportType(workbook) {
+  const sheetName = workbook.SheetNames[0] || '';
+  const sheet = workbook.Sheets[sheetName];
+
+  // Пробуем найти ключевые заголовки в первых 5 строках
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+  const maxRow = Math.min(range.e.r, 5);
+  let firstText = '';
+  for (let r = 0; r <= maxRow; r++) {
+    for (let c = 0; c <= Math.min(range.e.c, 20); c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      if (cell && cell.v) firstText += ' ' + String(cell.v);
+    }
+  }
+
+  if (sheetName === 'Сводный налоговый отчет' || /налогооблагаем/i.test(firstText)) {
+    return 'tax';
+  }
+  if (sheetName === 'brokerage_report' || /о сделках, операциях и состоянии счетов/i.test(firstText)) {
+    return 'brokerage';
+  }
+  return 'unknown';
+}
+
+// Простой предпросмотр структуры файла
+function buildPreview(fileName, workbook) {
+  const type = detectReportType(workbook);
+  const typeLabel = {
+    tax: 'Налоговый отчёт',
+    brokerage: 'Отчёт о сделках и счетах',
+    unknown: 'Неизвестный тип'
+  }[type];
+
+  // Собираем инфо по листам
+  const sheetsInfo = workbook.SheetNames.map(name => {
+    const sheet = workbook.Sheets[name];
+    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+    const rows = range.e.r + 1;
+    const cols = range.e.c + 1;
+    return `<li><b>${name}</b> — ${rows} строк, ${cols} колонок</li>`;
+  }).join('');
+
+  // Находим верхнюю строку-заголовок (первую непустую)
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+  let headersRow = -1;
+  for (let r = 0; r <= Math.min(range.e.r, 30); r++) {
+    let nonEmpty = 0;
+    for (let c = 0; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      if (cell && cell.v !== undefined && cell.v !== null && String(cell.v).trim() !== '') nonEmpty++;
+    }
+    if (nonEmpty >= 3) { headersRow = r; break; }
+  }
+
+  let headersHtml = '<i>заголовки не найдены</i>';
+  if (headersRow >= 0) {
+    const headers = [];
+    for (let c = 0; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: headersRow, c })];
+      const v = cell && cell.v !== undefined ? String(cell.v).trim() : '';
+      if (v) headers.push(v);
+    }
+    headersHtml = headers.map(h => `<span class="chip">${h}</span>`).join(' ');
+  }
+
+  return `
+    <div class="import-file-name">📄 ${fileName}</div>
+    <div class="import-row"><span>Тип отчёта</span><span>${typeLabel}</span></div>
+    <div class="import-row"><span>Листов в файле</span><span>${workbook.SheetNames.length}</span></div>
+    <ul class="import-sheets">${sheetsInfo}</ul>
+    <div class="import-headers-label">Первые заголовки:</div>
+    <div class="import-headers">${headersHtml}</div>
+    <div class="import-note">Парсинг данных будет на следующем подэтапе.</div>
+  `;
+}
+
+function setPreview(html, isError = false) {
+  const el = document.getElementById('importPreview');
+  if (!el) return;
+  el.innerHTML = html;
+  el.style.borderLeft = isError ? '4px solid var(--negative)' : '4px solid var(--primary)';
+}
+
+async function handleFile(file) {
+  if (!file) return;
+
+  setPreview('<div class="placeholder">Чтение файла...</div>');
+
+  try {
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+    console.log('[xlsx] Прочитан:', file.name, 'Листов:', workbook.SheetNames.length);
+
+    const html = buildPreview(file.name, workbook);
+    setPreview(html);
+  } catch (err) {
+    console.error('[xlsx] Ошибка:', err);
+    setPreview(
+      `<div class="import-file-name">📄 ${file.name}</div>
+       <div class="import-error">Ошибка чтения файла: ${err.message}</div>`,
+      true
+    );
   }
 }
 
@@ -121,7 +224,6 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.toggle').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      // TODO: Здесь позже будет логика переключения режима
     });
   });
 
@@ -130,6 +232,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Инициализация базы
   initDatabase();
+
+  // Импорт файла
+  const importBtn = document.getElementById('importBtn');
+  const fileInput = document.getElementById('fileInput');
+  if (importBtn && fileInput) {
+    importBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      handleFile(file);
+      // Сбрасываем input, чтобы можно было выбрать тот же файл повторно
+      e.target.value = '';
+    });
+  }
 });
 
 // ===== Обработка системной кнопки "Назад" на Android =====
@@ -139,7 +254,6 @@ window.addEventListener('popstate', () => {
   }
 });
 
-// Добавляем фиктивную запись в history, чтобы перехватывать кнопку "Назад"
 history.pushState({}, '');
 window.addEventListener('popstate', () => {
   if (!screens[currentScreen].isRoot) {

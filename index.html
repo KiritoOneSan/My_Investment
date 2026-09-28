@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#0d6e4f">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=4">
   <title>Инвестиции</title>
 </head>
 <body>
@@ -179,8 +179,11 @@
 
     <section id="screen-import" class="screen">
       <h2>Импорт отчёта</h2>
-      <button class="primary-btn">Выбрать файл .xlsx</button>
-      <div class="card placeholder">Предпросмотр появится здесь</div>
+      <input type="file" id="fileInput" accept=".xlsx,.xls" hidden>
+      <button class="primary-btn" id="importBtn">Выбрать файл .xlsx</button>
+      <div id="importPreview" class="card">
+        <div class="placeholder">Файл не выбран</div>
+      </div>
     </section>
 
     <section id="screen-taxes" class="screen">
@@ -234,7 +237,9 @@
     </button>
   </nav>
 
-  <script src="db.js?v=3"></script>
-  <script src="app.js?v=3"></script>
+  <!-- SheetJS: чтение .xlsx -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="db.js?v=4"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
