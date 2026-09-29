@@ -955,7 +955,7 @@ function buildTradesPreviewHtml(tr) {
     .map(([t, c]) => `<div class="import-row sub"><span>${t}</span><span>${c}</span></div>`)
     .join('');
 
-  const sampleRows = tr.trades.slice(0, 10).map(t => `
+  const sampleRows = tr.trades.slice(0, 5).map(t => `
     <div class="op-row">
       <div class="op-header">
         <span class="op-date">${t.trade_date}</span>
@@ -982,7 +982,7 @@ function buildTradesPreviewHtml(tr) {
     <div class="import-section-title">По видам сделок</div>
     ${typeRows || '<div class="import-row sub"><span>—</span><span>0</span></div>'}
 
-    <div class="import-section-title">Первые 10 сделок</div>
+    <div class="import-section-title">Первые 5 сделок</div>
     <div class="op-list">${sampleRows}</div>
   `;
 }
@@ -995,7 +995,7 @@ function buildMovementsPreviewHtml(mv) {
     .map(([t, c]) => `<div class="import-row sub"><span>${t}</span><span>${c}</span></div>`)
     .join('');
 
-  const sampleRows = mv.movements.slice(0, 10).map(m => `
+  const sampleRows = mv.movements.slice(0, 5).map(m => `
     <div class="op-row">
       <div class="op-header"><span class="op-date">${m.movement_date}</span></div>
       <div class="op-body">
@@ -1015,7 +1015,7 @@ function buildMovementsPreviewHtml(mv) {
     <div class="import-section-title">По типам операций</div>
     ${typeRows}
 
-    <div class="import-section-title">Первые 10 операций</div>
+    <div class="import-section-title">Первые 5 операций</div>
     <div class="op-list">${sampleRows}</div>
   `;
 }
@@ -1028,7 +1028,7 @@ function buildFuturesTradesPreviewHtml(ft) {
     .map(([t, c]) => `<div class="import-row sub"><span>${t}</span><span>${c}</span></div>`)
     .join('');
 
-  const sampleRows = ft.trades.slice(0, 10).map(t => `
+  const sampleRows = ft.trades.slice(0, 5).map(t => `
     <div class="op-row">
       <div class="op-header">
         <span class="op-date">${t.trade_date}</span>
@@ -1059,7 +1059,7 @@ function buildFuturesTradesPreviewHtml(ft) {
     <div class="import-section-title">По видам сделок</div>
     ${typeRows}
 
-    <div class="import-section-title">Первые 10 сделок</div>
+    <div class="import-section-title">Первые 5 сделок</div>
     <div class="op-list">${sampleRows}</div>
 
     ${errorsHtml}
