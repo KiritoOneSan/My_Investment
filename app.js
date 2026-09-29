@@ -108,10 +108,16 @@ function toIsoDate(v) {
   return null;
 }
 
-function toKopecks(v) {
+function toNumber(v) {
   if (v == null || v === '') return null;
-  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/\s/g, '').replace(',', '.'));
-  return isNaN(n) ? null : Math.round(n * 100);
+  if (typeof v === 'number') return isNaN(v) ? null : v;
+  const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.'));
+  return isNaN(n) ? null : n;
+}
+
+function toKopecks(v) {
+  const n = toNumber(v);
+  return n == null ? null : Math.round(n * 100);
 }
 
 function makeCashHash(op) {
@@ -123,6 +129,11 @@ function formatRub(kopecks) {
   const rub = kopecks / 100;
   const s = Math.abs(rub).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
   return (rub < 0 ? '−' : '') + s;
+}
+
+function formatNum(n, digits = 2) {
+  if (n == null) return '—';
+  return n.toFixed(digits).replace('.', ',');
 }
 
 // ===== Парсер «Движение денежных средств» =====
@@ -250,14 +261,187 @@ function parseCashOperations(workbook) {
     if (!lastDate || isoDate > lastDate) lastDate = isoDate;
   }
 
-  console.log('[parser] Операций:', operations.length, '· рынков:', Object.keys(marketBreakdown).join(', '));
-
   return {
     operations,
     errors,
     marketBreakdown,
     period: firstDate ? { from: firstDate, to: lastDate } : null
   };
+}
+
+// ===== Парсер «Отчёт об остатках ценных бумаг» =====
+
+const PAPER_TYPES = ['АКЦИЯ', 'ОБЛИГАЦИЯ', 'ЕВРООБЛИГАЦИЯ', 'ПАЙ'];
+
+function parseSecurities(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+
+  // 1. Ищем строку заголовка таблицы остатков ЦБ
+  let headerRow = -1;
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    let text = '';
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      if (cell && cell.v) text += ' ' + String(cell.v);
+    }
+    if (/Наименование\s+ценной\s+бумаги/i.test(text) && /Входящий\s+остаток/i.test(text)) {
+      headerRow = r;
+      break;
+    }
+  }
+  if (headerRow < 0) {
+    return { positions: [], errors: ['Таблица «Отчёт об остатках ценных бумаг» не найдена'], typeStats: {}, currencyStats: {}, totalValueKopecks: 0 };
+  }
+
+  // 2. Извлекаем индексы колонок по тексту заголовков
+  const cols = {
+    name: -1, incoming: -1, change: -1, outgoing: -1, planned: -1,
+    currency: -1, price: -1, nominal: -1, nkd: -1,
+    paymentDate: -1, couponRate: -1,
+    valueCurrency: -1, valueRub: -1, plannedValueRub: -1
+  };
+
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r: headerRow, c })];
+    const v = cell ? String(cell.v || '').trim() : '';
+    if (!v) continue;
+
+    if (/Наименование\s+ценной\s+бумаги/i.test(v)) cols.name = c;
+    else if (/^Входящий\s+остаток/i.test(v)) cols.incoming = c;
+    else if (/^Изменение\s+за\s+период/i.test(v)) cols.change = c;
+    else if (/^Исходящий\s+остаток/i.test(v)) cols.outgoing = c;
+    else if (/^Плановый\s+исходящий/i.test(v)) cols.planned = c;
+    else if (/^Валюта/i.test(v) && /цены/i.test(v)) cols.currency = c;
+    else if (/^Цена/i.test(v)) cols.price = c;
+    else if (/^Номинал/i.test(v)) cols.nominal = c;
+    else if (/^НКД/i.test(v)) cols.nkd = c;
+    else if (/^Дата\s+выплаты/i.test(v)) cols.paymentDate = c;
+    else if (/^Ставка\s+купона/i.test(v)) cols.couponRate = c;
+    else if (/Оценка\s+исходящего/i.test(v) && /в\s+валюте/i.test(v)) cols.valueCurrency = c;
+    else if (/Оценка\s+исходящего/i.test(v) && /руб/i.test(v)) cols.valueRub = c;
+    else if (/Оценка\s+планового/i.test(v)) cols.plannedValueRub = c;
+  }
+
+  if (cols.name < 0 || cols.outgoing < 0) {
+    return { positions: [], errors: ['Не найдены обязательные колонки в таблице остатков'], typeStats: {}, currencyStats: {}, totalValueKopecks: 0 };
+  }
+
+  const positions = [];
+  const errors = [];
+  const typeStats = {};
+  const currencyStats = {};
+  let currentType = null;
+  let totalValueKopecks = 0;
+  let emptyRun = 0;
+
+  for (let r = headerRow + 1; r <= range.e.r; r++) {
+    const rowCells = {};
+    const nonEmpty = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      rowCells[c] = cell ? cell.v : null;
+      if (cell && cell.v != null && String(cell.v).trim() !== '') {
+        nonEmpty.push({ c, v: String(cell.v).trim() });
+      }
+    }
+
+    // Пустая строка
+    if (nonEmpty.length === 0) {
+      emptyRun++;
+      if (emptyRun >= 10) break;
+      continue;
+    }
+    emptyRun = 0;
+
+    // Разделители и границы
+    if (nonEmpty.length === 1) {
+      const val = nonEmpty[0].v;
+      // Тип бумаги
+      if (PAPER_TYPES.includes(val.toUpperCase())) {
+        currentType = val.toUpperCase();
+        continue;
+      }
+      // ИТОГО — пропускаем
+      if (/^ИТОГО/i.test(val)) continue;
+      // Заголовок следующей таблицы — стоп
+      if (/^(Движение\s+ценных|Заключенные|Завершенные|Сводная)/i.test(val)) break;
+    }
+
+    // Первая ячейка — наименование бумаги
+    const nameCell = rowCells[cols.name];
+    if (!nameCell) continue;
+    const nameVal = String(nameCell).trim();
+    if (!nameVal) continue;
+
+    // Проверка, что это похоже на бумагу (содержит запятую)
+    if (!nameVal.includes(',')) continue;
+
+    // Разбираем наименование: «Name, reg_number, ISIN»
+    const parts = nameVal.split(',').map(s => s.trim()).filter(Boolean);
+    let name = parts[0] || nameVal;
+    let regNumber = '';
+    let isin = '';
+
+    if (parts.length >= 3) {
+      regNumber = parts[1];
+      isin = parts[parts.length - 1];
+    } else if (parts.length === 2) {
+      const last = parts[1];
+      if (/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/i.test(last)) isin = last;
+      else regNumber = last;
+    }
+    if (!isin) {
+      const m = nameVal.match(/([A-Z]{2}[A-Z0-9]{9}[0-9])/);
+      if (m) isin = m[1];
+    }
+
+    const outgoing = toNumber(rowCells[cols.outgoing]);
+    if (outgoing == null) continue;
+
+    const incoming = cols.incoming >= 0 ? toNumber(rowCells[cols.incoming]) : null;
+    const change = cols.change >= 0 ? toNumber(rowCells[cols.change]) : null;
+    const planned = cols.planned >= 0 ? toNumber(rowCells[cols.planned]) : null;
+    const currency = cols.currency >= 0 && rowCells[cols.currency] ? String(rowCells[cols.currency]).trim() : null;
+    const price = cols.price >= 0 ? toNumber(rowCells[cols.price]) : null;
+    const nominal = cols.nominal >= 0 ? toNumber(rowCells[cols.nominal]) : null;
+    const nkd = cols.nkd >= 0 ? toNumber(rowCells[cols.nkd]) : null;
+    const paymentDate = cols.paymentDate >= 0 ? toIsoDate(rowCells[cols.paymentDate]) : null;
+    const couponRate = cols.couponRate >= 0 ? toNumber(rowCells[cols.couponRate]) : null;
+    const valueCurrency = cols.valueCurrency >= 0 ? toNumber(rowCells[cols.valueCurrency]) : null;
+    const valueRubKopecks = cols.valueRub >= 0 ? toKopecks(rowCells[cols.valueRub]) : null;
+    const plannedValueRubKopecks = cols.plannedValueRub >= 0 ? toKopecks(rowCells[cols.plannedValueRub]) : null;
+
+    const pos = {
+      name, isin, reg_number: regNumber,
+      type: currentType || '—',
+      incoming_qty: incoming,
+      change_qty: change,
+      outgoing_qty: outgoing,
+      planned_qty: planned,
+      currency,
+      price, nominal, nkd,
+      coupon_rate: couponRate,
+      payment_date: paymentDate,
+      value_currency: valueCurrency,
+      value_rub_kopecks: valueRubKopecks,
+      planned_value_rub_kopecks: plannedValueRubKopecks,
+      row: r + 1
+    };
+    positions.push(pos);
+
+    const tKey = currentType || '—';
+    typeStats[tKey] = (typeStats[tKey] || 0) + 1;
+
+    const cKey = currency || '—';
+    currencyStats[cKey] = (currencyStats[cKey] || 0) + 1;
+
+    if (outgoing > 0 && valueRubKopecks != null) {
+      totalValueKopecks += valueRubKopecks;
+    }
+  }
+
+  return { positions, errors, typeStats, currencyStats, totalValueKopecks };
 }
 
 // ===== Импорт =====
@@ -286,7 +470,7 @@ function setPreview(html, isError = false) {
   el.style.borderLeft = isError ? '4px solid var(--negative)' : '4px solid var(--primary)';
 }
 
-// Порядок рынков для отображения
+// Порядок рынков
 const MARKET_ORDER = {
   'Основной рынок': 0,
   'Срочный рынок': 1,
@@ -295,11 +479,19 @@ const MARKET_ORDER = {
 };
 
 function sortByMarketOrder(keys) {
-  return keys.sort((a, b) => {
-    const ao = MARKET_ORDER[a] ?? 50;
-    const bo = MARKET_ORDER[b] ?? 50;
-    return ao - bo;
-  });
+  return keys.sort((a, b) => (MARKET_ORDER[a] ?? 50) - (MARKET_ORDER[b] ?? 50));
+}
+
+// Порядок типов бумаг (как в файле брокера)
+const PAPER_ORDER = {
+  'АКЦИЯ': 0,
+  'ЕВРООБЛИГАЦИЯ': 1,
+  'ОБЛИГАЦИЯ': 2,
+  'ПАЙ': 3
+};
+
+function sortByPaperOrder(keys) {
+  return keys.sort((a, b) => (PAPER_ORDER[a] ?? 99) - (PAPER_ORDER[b] ?? 99));
 }
 
 function buildMarketBreakdownHtml(marketBreakdown) {
@@ -326,9 +518,7 @@ function buildMarketBreakdownHtml(marketBreakdown) {
   }).join('');
 }
 
-// Собираем по 5 первых операций для каждого рынка
 function buildSampleOperationsHtml(operations) {
-  // Группируем по рынку
   const groups = {};
   for (const op of operations) {
     const mkt = op.market || 'Без рынка';
@@ -364,7 +554,57 @@ function buildSampleOperationsHtml(operations) {
   }).join('');
 }
 
-function buildCashPreview(fileName, workbook, parsed) {
+function buildSecuritiesPreviewHtml(sec) {
+  if (sec.positions.length === 0) return '';
+
+  const typeStatsHtml = sortByPaperOrder(Object.keys(sec.typeStats))
+    .map(t => `<div class="import-row sub"><span>${t}</span><span>${sec.typeStats[t]}</span></div>`)
+    .join('');
+
+  // Группируем по типу и берём по 5 из каждого
+  const groups = {};
+  for (const p of sec.positions) {
+    const t = p.type || '—';
+    if (!groups[t]) groups[t] = [];
+    if (groups[t].length < 5) groups[t].push(p);
+  }
+
+  const paperRows = sortByPaperOrder(Object.keys(groups)).map(type => {
+    const items = groups[type].map(p => `
+      <div class="pos-row">
+        <div class="pos-name">${p.name}${p.isin ? ` <span class="pos-isin">${p.isin}</span>` : ''}</div>
+        <div class="pos-meta">
+          ${formatNum(p.outgoing_qty, 0)} шт
+          ${p.price != null ? ` · ${formatNum(p.price, 4)} ${p.currency || ''}` : ''}
+          ${p.value_rub_kopecks != null ? ` · ${formatRub(p.value_rub_kopecks)}` : ''}
+        </div>
+      </div>
+    `).join('');
+
+    return `
+      <div class="op-market-group">
+        <div class="op-market-group-title">${type}</div>
+        <div class="pos-list">${items}</div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="import-section-title">Остатки ценных бумаг</div>
+    <div class="import-big">${sec.positions.length}</div>
+
+    <div class="import-section-title">По типам</div>
+    ${typeStatsHtml}
+
+    <div class="import-section-title">Итоговая стоимость портфеля</div>
+    <div class="import-big">${formatRub(sec.totalValueKopecks)}</div>
+
+    <div class="import-section-title">Примеры позиций (по 5 на тип)</div>
+    ${paperRows}
+  `;
+}
+
+function buildCashPreview(fileName, workbook, parsedCash, parsedSec) {
   const typeLabel = {
     tax: 'Налоговый отчёт',
     brokerage: 'Отчёт о сделках и счетах',
@@ -377,17 +617,17 @@ function buildCashPreview(fileName, workbook, parsed) {
     return `<li><b>${name}</b> — ${range.e.r + 1} строк, ${range.e.c + 1} колонок</li>`;
   }).join('');
 
-  const opsCount = parsed.operations.length;
-  const periodHtml = parsed.period ? `${parsed.period.from} → ${parsed.period.to}` : '<i>нет данных</i>';
+  const opsCount = parsedCash.operations.length;
+  const periodHtml = parsedCash.period ? `${parsedCash.period.from} → ${parsedCash.period.to}` : '<i>нет данных</i>';
+  const marketBreakdownHtml = buildMarketBreakdownHtml(parsedCash.marketBreakdown);
+  const sampleOperationsHtml = buildSampleOperationsHtml(parsedCash.operations);
+  const securitiesHtml = parsedSec ? buildSecuritiesPreviewHtml(parsedSec) : '';
 
-  const marketBreakdownHtml = buildMarketBreakdownHtml(parsed.marketBreakdown);
-  const sampleOperationsHtml = buildSampleOperationsHtml(parsed.operations);
-
-  const errorsHtml = parsed.errors.length
+  const errorsHtml = parsedCash.errors.length
     ? `<div class="import-errors">
-         <div class="import-headers-label">Ошибки (${parsed.errors.length}):</div>
-         ${parsed.errors.slice(0, 5).map(e => `<div class="import-error">${e}</div>`).join('')}
-         ${parsed.errors.length > 5 ? `<div class="import-note">…и ещё ${parsed.errors.length - 5}</div>` : ''}
+         <div class="import-headers-label">Ошибки операций (${parsedCash.errors.length}):</div>
+         ${parsedCash.errors.slice(0, 5).map(e => `<div class="import-error">${e}</div>`).join('')}
+         ${parsedCash.errors.length > 5 ? `<div class="import-note">…и ещё ${parsedCash.errors.length - 5}</div>` : ''}
        </div>`
     : '';
 
@@ -396,6 +636,8 @@ function buildCashPreview(fileName, workbook, parsed) {
     <div class="import-row"><span>Тип отчёта</span><span>${typeLabel}</span></div>
     <div class="import-row"><span>Листов</span><span>${workbook.SheetNames.length}</span></div>
     <ul class="import-sheets">${sheetsInfo}</ul>
+
+    ${securitiesHtml}
 
     <div class="import-section-title">Найдено денежных операций</div>
     <div class="import-big">${opsCount}</div>
@@ -434,9 +676,13 @@ async function handleFile(file) {
       return;
     }
     if (reportType === 'brokerage') {
-      const parsed = parseCashOperations(workbook);
-      console.log('[parser] Операций:', parsed.operations.length, '· ошибок:', parsed.errors.length);
-      setPreview(buildCashPreview(file.name, workbook, parsed));
+      const parsedCash = parseCashOperations(workbook);
+      const parsedSec = parseSecurities(workbook);
+      console.log('[parser] Операций:', parsedCash.operations.length,
+                  '· ошибок операций:', parsedCash.errors.length,
+                  '· позиций ЦБ:', parsedSec.positions.length,
+                  '· ошибок ЦБ:', parsedSec.errors.length);
+      setPreview(buildCashPreview(file.name, workbook, parsedCash, parsedSec));
       return;
     }
     setPreview(`<div class="import-file-name">📄 ${file.name}</div><div class="import-error">Не удалось определить тип отчёта</div>`, true);
