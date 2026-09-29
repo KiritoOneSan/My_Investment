@@ -617,3 +617,19 @@ h2 {
   color: var(--text);
   font-weight: 600;
 }
+
+/* Группа операций по рынку в предпросмотре */
+.op-market-group {
+  margin-bottom: 16px;
+}
+
+.op-market-group-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 10px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}

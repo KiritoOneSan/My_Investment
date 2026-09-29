@@ -241,7 +241,6 @@ function parseCashOperations(workbook) {
     op.external_hash = makeCashHash(op);
     operations.push(op);
 
-    // Группировка market → type
     const mKey = market || 'Без рынка';
     const tKey = opType || '—';
     if (!marketBreakdown[mKey]) marketBreakdown[mKey] = {};
@@ -295,18 +294,23 @@ const MARKET_ORDER = {
   'Без рынка': 99
 };
 
-function buildMarketBreakdownHtml(marketBreakdown) {
-  const entries = Object.entries(marketBreakdown).sort((a, b) => {
-    const ao = MARKET_ORDER[a[0]] ?? 50;
-    const bo = MARKET_ORDER[b[0]] ?? 50;
+function sortByMarketOrder(keys) {
+  return keys.sort((a, b) => {
+    const ao = MARKET_ORDER[a] ?? 50;
+    const bo = MARKET_ORDER[b] ?? 50;
     return ao - bo;
   });
+}
 
-  if (entries.length === 0) {
+function buildMarketBreakdownHtml(marketBreakdown) {
+  const marketKeys = sortByMarketOrder(Object.keys(marketBreakdown));
+
+  if (marketKeys.length === 0) {
     return '<div class="import-row"><span>—</span><span>0</span></div>';
   }
 
-  return entries.map(([mkt, types]) => {
+  return marketKeys.map(mkt => {
+    const types = marketBreakdown[mkt];
     const total = Object.values(types).reduce((s, v) => s + v, 0);
     const typeRows = Object.entries(types)
       .sort((a, b) => b[1] - a[1])
@@ -318,6 +322,44 @@ function buildMarketBreakdownHtml(marketBreakdown) {
         <span class="import-market-total">${total}</span>
       </div>
       ${typeRows}
+    `;
+  }).join('');
+}
+
+// Собираем по 5 первых операций для каждого рынка
+function buildSampleOperationsHtml(operations) {
+  // Группируем по рынку
+  const groups = {};
+  for (const op of operations) {
+    const mkt = op.market || 'Без рынка';
+    if (!groups[mkt]) groups[mkt] = [];
+    if (groups[mkt].length < 5) groups[mkt].push(op);
+  }
+
+  const marketKeys = sortByMarketOrder(Object.keys(groups));
+  if (marketKeys.length === 0) return '';
+
+  return marketKeys.map(mkt => {
+    const opsHtml = groups[mkt].map(op => `
+      <div class="op-row">
+        <div class="op-header">
+          <span class="op-date">${op.date}</span>
+        </div>
+        <div class="op-body">
+          <div class="op-left">
+            <div class="op-type">${op.operation_type || '—'}</div>
+            ${op.comment ? `<div class="op-comment">${op.comment}</div>` : ''}
+          </div>
+          <div class="op-amount ${op.amount_kopecks < 0 ? 'negative' : 'positive'}">${formatRub(op.amount_kopecks)}</div>
+        </div>
+      </div>
+    `).join('');
+
+    return `
+      <div class="op-market-group">
+        <div class="op-market-group-title">${mkt}</div>
+        <div class="op-list">${opsHtml}</div>
+      </div>
     `;
   }).join('');
 }
@@ -339,22 +381,7 @@ function buildCashPreview(fileName, workbook, parsed) {
   const periodHtml = parsed.period ? `${parsed.period.from} → ${parsed.period.to}` : '<i>нет данных</i>';
 
   const marketBreakdownHtml = buildMarketBreakdownHtml(parsed.marketBreakdown);
-
-  const sampleRows = parsed.operations.slice(0, 10).map(op => `
-    <div class="op-row">
-      <div class="op-header">
-        <span class="op-date">${op.date}</span>
-        ${op.market ? `<span class="op-market">${op.market}</span>` : ''}
-      </div>
-      <div class="op-body">
-        <div class="op-left">
-          <div class="op-type">${op.operation_type || '—'}</div>
-          ${op.comment ? `<div class="op-comment">${op.comment}</div>` : ''}
-        </div>
-        <div class="op-amount ${op.amount_kopecks < 0 ? 'negative' : 'positive'}">${formatRub(op.amount_kopecks)}</div>
-      </div>
-    </div>
-  `).join('');
+  const sampleOperationsHtml = buildSampleOperationsHtml(parsed.operations);
 
   const errorsHtml = parsed.errors.length
     ? `<div class="import-errors">
@@ -378,8 +405,8 @@ function buildCashPreview(fileName, workbook, parsed) {
     ${marketBreakdownHtml}
 
     ${opsCount > 0 ? `
-      <div class="import-section-title">Первые 10 операций</div>
-      <div class="op-list">${sampleRows}</div>
+      <div class="import-section-title">Примеры операций (по 5 на каждый рынок)</div>
+      ${sampleOperationsHtml}
     ` : ''}
 
     ${errorsHtml}
