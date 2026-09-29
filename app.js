@@ -70,18 +70,54 @@ async function initDatabase() {
 
 // ===== Утилиты =====
 
+// Универсальное преобразование даты в YYYY-MM-DD.
+// Поддерживает:
+//   - Date-подобные объекты (включая созданные в другом контексте SheetJS)
+//   - Excel serial number
+//   - Строки: ISO, DD.MM.YYYY, «Mon Jan 08 2024 ...»
 function toIsoDate(v) {
   if (v == null || v === '') return null;
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
-  if (typeof v === 'number') {
-    const ms = (v - 25569) * 86400 * 1000;
-    const d = new Date(ms);
-    return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+
+  // 1. Date-подобный объект — duck typing, не instanceof
+  if (typeof v === 'object' && typeof v.getFullYear === 'function') {
+    const y = v.getFullYear();
+    const m = String(v.getMonth() + 1).padStart(2, '0');
+    const d = String(v.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
   }
+
+  // 2. Excel serial number
+  if (typeof v === 'number') {
+    // 25569 = дней между 1970-01-01 и 1900-01-01 (с учётом особенности Excel)
+    const ms = Math.round((v - 25569) * 86400) * 1000;
+    const d = new Date(ms);
+    if (isNaN(d.getTime())) return null;
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  // 3. Строка
   const s = String(v).trim();
+
+  // ISO: 2024-01-08 или 2024-01-08T00:00:00
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  const m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+
+  // DD.MM.YYYY
+  let m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
   if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+
+  // toString() от Date: «Mon Jan 08 2024 23:59:43 GMT+0300»
+  const months = {
+    Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06',
+    Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12'
+  };
+  m = s.match(/^[A-Za-z]+ ([A-Za-z]{3}) (\d{1,2}) (\d{4})/);
+  if (m && months[m[1]]) {
+    return `${m[3]}-${months[m[1]]}-${String(m[2]).padStart(2,'0')}`;
+  }
+
   return null;
 }
 
@@ -147,19 +183,18 @@ function parseCashOperations(workbook) {
   let lastDate = null;
 
   for (let r = headerRow + 1; r <= range.e.r; r++) {
-    // Собираем значения всей строки
+    // Храним НАТИВНЫЕ значения ячеек (Date, number, string)
     const rowCells = {};
     const nonEmptyVals = [];
     for (let c = range.s.c; c <= range.e.c; c++) {
       const cell = sheet[XLSX.utils.encode_cell({ r, c })];
-      const v = cell && cell.v != null ? String(cell.v).trim() : '';
-      rowCells[c] = v;
-      if (v !== '') nonEmptyVals.push(v);
+      rowCells[c] = cell ? cell.v : null;
+      const sv = cell && cell.v != null ? String(cell.v).trim() : '';
+      if (sv !== '') nonEmptyVals.push(sv);
     }
     const rowText = nonEmptyVals.join(' ').replace(/\s+/g, ' ');
 
-    // 1. РАЗДЕЛИТЕЛЬ РЫНКА — до всех остальных проверок.
-    // Разделитель обычно состоит из 1–2 непустых ячеек и содержит ключевое слово.
+    // 1. РАЗДЕЛИТЕЛЬ РЫНКА — 1–2 непустые ячейки, начинается с «Основной/Срочный/Внебиржевой рынок»
     if (nonEmptyVals.length >= 1 && nonEmptyVals.length <= 2) {
       const joined = nonEmptyVals.join(' ');
       if (/^(Основной|Срочный|Внебиржевой)\s+рынок/i.test(joined)) {
@@ -189,18 +224,18 @@ function parseCashOperations(workbook) {
     ].filter(h => rowText.includes(h)).length;
     if (headerHits >= 2) break;
 
-    // 4. Достаём значения по колонкам
+    // 4. Значения по колонкам
     const dateVal = rowCells[cols.date];
     const sumVal = rowCells[cols.sum];
     const currVal = rowCells[cols.currency];
     const typeVal = rowCells[cols.type];
-    const commentVal = cols.comment >= 0 ? rowCells[cols.comment] : '';
+    const commentVal = cols.comment >= 0 ? rowCells[cols.comment] : null;
 
     // 5. Дата
     const isoDate = toIsoDate(dateVal);
     if (!isoDate) {
       if (typeVal || sumVal) {
-        errors.push(`Строка ${r + 1}: не распознана дата «${dateVal}»`);
+        errors.push(`Строка ${r + 1}: не распознана дата «${String(dateVal)}»`);
       }
       continue;
     }
@@ -208,12 +243,12 @@ function parseCashOperations(workbook) {
     // 6. Сумма
     const kopecks = toKopecks(sumVal);
     if (kopecks == null) {
-      errors.push(`Строка ${r + 1}: не распознана сумма «${sumVal}»`);
+      errors.push(`Строка ${r + 1}: не распознана сумма «${String(sumVal)}»`);
       continue;
     }
 
     const currency = String(currVal || 'RUB').trim().toUpperCase();
-    const opType = String(typeVal || '').trim();
+    const opType = typeVal != null ? String(typeVal).trim() : '';
     const comment = commentVal != null ? String(commentVal).trim() : '';
 
     const op = {
