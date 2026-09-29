@@ -160,6 +160,22 @@ async function initDb() {
       row_content TEXT
     );
 
+	    CREATE TABLE IF NOT EXISTS futures_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_code TEXT NOT NULL,
+      trade_date TEXT NOT NULL,
+      trade_type TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      price REAL,
+      strike_price REAL,
+      commission_calc_kopecks INTEGER,
+      commission_exec_kopecks INTEGER,
+      counterparty TEXT,
+      place TEXT,
+      comment TEXT,
+      external_hash TEXT UNIQUE
+    );
+	
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT

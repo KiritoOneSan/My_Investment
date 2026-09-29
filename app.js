@@ -429,6 +429,7 @@ function isOtherTableHeader(rowText) {
          /Отч[её]т\s+об\s+остатках/i.test(rowText) ||
          /Фьючерсный\s+контракт/i.test(rowText) ||
          /Сделки\s+с\s+Производными/i.test(rowText) ||
+         /Открытые\s+позиции/i.test(rowText) ||
          /Дата\s+и\s+время\s+заключения\s+сделки/i.test(rowText);
 }
 
@@ -678,6 +679,134 @@ function parseSecuritiesMovement(workbook) {
   return { movements, errors, typeStats };
 }
 
+// ===== Парсер сделок по производным (фьючерсы, опционы) =====
+
+function findFuturesTradesHeaderRow(sheet, r, range) {
+  let cols = {
+    contract: -1, date: -1, type: -1, qty: -1, price: -1, strike: -1,
+    commCalc: -1, commExec: -1, counterparty: -1, place: -1, comment: -1
+  };
+  let foundCount = 0;
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+    const v = cell ? String(cell.v || '').trim() : '';
+    if (!v) continue;
+    if (/^Фьючерсный\s+контракт/i.test(v)) { cols.contract = c; foundCount++; }
+    else if (/^Дата\s+и\s+время\s+заключения/i.test(v)) { cols.date = c; foundCount++; }
+    else if (/^Вид\s+сделки/i.test(v)) { cols.type = c; foundCount++; }
+    else if (/^Количество/i.test(v) && cols.qty < 0) { cols.qty = c; foundCount++; }
+    else if (/^Цена\s+контракта/i.test(v)) { cols.price = c; foundCount++; }
+    else if (/^Цена\s+исполнения/i.test(v)) { cols.strike = c; foundCount++; }
+    else if (/^Комиссия\s+Банка\s+за\s+расчет/i.test(v) && cols.commCalc < 0) { cols.commCalc = c; foundCount++; }
+    else if (/^Комиссия\s+Банка\s+за\s+заключ/i.test(v) && cols.commExec < 0) { cols.commExec = c; foundCount++; }
+    else if (/^Контрагент/i.test(v) && cols.counterparty < 0) { cols.counterparty = c; foundCount++; }
+    else if (/^Место\s+заключения/i.test(v)) { cols.place = c; foundCount++; }
+    else if (/^Комментарий/i.test(v) && cols.comment < 0) { cols.comment = c; foundCount++; }
+  }
+  if (cols.contract >= 0 && cols.date >= 0 && cols.type >= 0 && cols.qty >= 0 && cols.price >= 0) {
+    return cols;
+  }
+  return null;
+}
+
+function parseFuturesTrades(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+
+  let headerRow = -1;
+  let cols = null;
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const idx = findFuturesTradesHeaderRow(sheet, r, range);
+    if (idx) { headerRow = r; cols = idx; break; }
+  }
+
+  if (headerRow < 0) {
+    return { trades: [], errors: [], typeStats: {} };
+  }
+
+  const trades = [];
+  const errors = [];
+  const typeStats = {};
+  let emptyRun = 0;
+
+  for (let r = headerRow + 1; r <= range.e.r; r++) {
+    const rowCells = {};
+    const nonEmpty = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      rowCells[c] = cell ? cell.v : null;
+      if (cell && cell.v != null && String(cell.v).trim() !== '') {
+        nonEmpty.push({ c, v: String(cell.v).trim() });
+      }
+    }
+    const rowText = nonEmpty.map(x => x.v).join(' ').replace(/\s+/g, ' ');
+
+    // Стоп, если началась другая таблица
+    if (/Заключенные\s+в\s+отчетном/i.test(rowText) ||
+        /Завершенные\s+в\s+отчетном/i.test(rowText) ||
+        /Открытые\s+позиции/i.test(rowText) ||
+        /Сделки\s+с\s+ценными\s+бумагами/i.test(rowText) ||
+        /Итоговая\s+величина\s+ГО/i.test(rowText) ||
+        /Свободный\s+остаток/i.test(rowText)) {
+      break;
+    }
+
+    if (nonEmpty.length === 0) {
+      emptyRun++;
+      if (emptyRun >= 3) break;
+      continue;
+    }
+    emptyRun = 0;
+
+    const contractCode = rowCells[cols.contract] != null
+      ? String(rowCells[cols.contract]).trim()
+      : '';
+    if (!contractCode) continue;
+
+    // Пропускаем строку-заголовок, если она случайно попала
+    if (/^Фьючерсный/i.test(contractCode)) continue;
+
+    const isoDate = toIsoDate(rowCells[cols.date]);
+    if (!isoDate) {
+      errors.push(`Строка ${r + 1}: не распознана дата сделки «${String(rowCells[cols.date])}»`);
+      continue;
+    }
+
+    const tradeType = rowCells[cols.type] != null ? String(rowCells[cols.type]).trim() : '';
+    const qty = toNumber(rowCells[cols.qty]);
+    const price = toNumber(rowCells[cols.price]);
+    const strike = cols.strike >= 0 ? toNumber(rowCells[cols.strike]) : null;
+    const commCalc = cols.commCalc >= 0 ? toKopecks(rowCells[cols.commCalc]) : null;
+    const commExec = cols.commExec >= 0 ? toKopecks(rowCells[cols.commExec]) : null;
+    const counterparty = cols.counterparty >= 0 && rowCells[cols.counterparty]
+      ? String(rowCells[cols.counterparty]).trim() : null;
+    const place = cols.place >= 0 && rowCells[cols.place]
+      ? String(rowCells[cols.place]).trim() : null;
+    const comment = cols.comment >= 0 && rowCells[cols.comment]
+      ? String(rowCells[cols.comment]).trim() : '';
+
+    const trade = {
+      contract_code: contractCode,
+      trade_date: isoDate,
+      trade_type: tradeType,
+      quantity: qty,
+      price: price,
+      strike_price: strike,
+      commission_calc_kopecks: commCalc,
+      commission_exec_kopecks: commExec,
+      counterparty, place, comment,
+      row: r + 1
+    };
+    trade.external_hash = [contractCode, isoDate, tradeType, qty, price].join('|');
+    trades.push(trade);
+
+    const tKey = tradeType || '—';
+    typeStats[tKey] = (typeStats[tKey] || 0) + 1;
+  }
+
+  return { trades, errors, typeStats };
+}
+
 // ===== Импорт =====
 
 function detectReportType(workbook) {
@@ -891,7 +1020,53 @@ function buildMovementsPreviewHtml(mv) {
   `;
 }
 
-function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrades, parsedMv) {
+function buildFuturesTradesPreviewHtml(ft) {
+  if (!ft || ft.trades.length === 0) return '';
+
+  const typeRows = Object.entries(ft.typeStats)
+    .sort((a, b) => b[1] - a[1])
+    .map(([t, c]) => `<div class="import-row sub"><span>${t}</span><span>${c}</span></div>`)
+    .join('');
+
+  const sampleRows = ft.trades.slice(0, 10).map(t => `
+    <div class="op-row">
+      <div class="op-header">
+        <span class="op-date">${t.trade_date}</span>
+      </div>
+      <div class="op-body">
+        <div class="op-left">
+          <div class="op-type">${t.trade_type} · ${t.contract_code}</div>
+          <div class="op-comment">
+            ${formatNum(t.quantity, 0)} шт × ${formatNum(t.price, 4)} п.
+            ${t.counterparty ? ' · ' + t.counterparty : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  const errorsHtml = ft.errors.length
+    ? `<div class="import-errors">
+         <div class="import-headers-label">Ошибки по производным (${ft.errors.length}):</div>
+         ${ft.errors.slice(0, 5).map(e => `<div class="import-error">${e}</div>`).join('')}
+       </div>`
+    : '';
+
+  return `
+    <div class="import-section-title">Сделки по производным (фьючерсы, опционы)</div>
+    <div class="import-big">${ft.trades.length}</div>
+
+    <div class="import-section-title">По видам сделок</div>
+    ${typeRows}
+
+    <div class="import-section-title">Первые 10 сделок</div>
+    <div class="op-list">${sampleRows}</div>
+
+    ${errorsHtml}
+  `;
+}
+
+function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures) {
   const typeLabel = {
     tax: 'Налоговый отчёт',
     brokerage: 'Отчёт о сделках и счетах',
@@ -911,6 +1086,7 @@ function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrade
   const securitiesHtml = parsedSec ? buildSecuritiesPreviewHtml(parsedSec) : '';
   const tradesHtml = parsedTrades ? buildTradesPreviewHtml(parsedTrades) : '';
   const movementsHtml = parsedMv ? buildMovementsPreviewHtml(parsedMv) : '';
+  const futuresHtml = parsedFutures ? buildFuturesTradesPreviewHtml(parsedFutures) : '';
 
   const allErrors = [
     ...parsedCash.errors,
@@ -938,6 +1114,8 @@ function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrade
     ${movementsHtml}
 
     ${tradesHtml}
+
+    ${futuresHtml}
 
     <div class="import-section-title">Найдено денежных операций</div>
     <div class="import-big">${opsCount}</div>
@@ -980,12 +1158,14 @@ async function handleFile(file) {
       const parsedSec = parseSecurities(workbook);
       const parsedTrades = parseTrades(workbook);
       const parsedMv = parseSecuritiesMovement(workbook);
+      const parsedFutures = parseFuturesTrades(workbook);
       console.log('[parser] Операций:', parsedCash.operations.length,
                   '· ЦБ:', parsedSec.positions.length,
                   '· сделок:', parsedTrades.trades.length,
                   '(дубликатов:', parsedTrades.duplicates, ')',
-                  '· движение:', parsedMv.movements.length);
-      setPreview(buildCashPreview(file.name, workbook, parsedCash, parsedSec, parsedTrades, parsedMv));
+                  '· движение:', parsedMv.movements.length,
+                  '· фьючерсы:', parsedFutures.trades.length);
+      setPreview(buildCashPreview(file.name, workbook, parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures));
       return;
     }
     setPreview(`<div class="import-file-name">📄 ${file.name}</div><div class="import-error">Не удалось определить тип отчёта</div>`, true);
