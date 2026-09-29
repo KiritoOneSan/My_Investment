@@ -578,3 +578,42 @@ h2 {
   border-radius: 6px;
   margin-bottom: 4px;
 }
+
+/* Группировка по рынкам в предпросмотре */
+.import-market-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 12px 0 6px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  border-bottom: 2px solid var(--primary);
+  margin-top: 10px;
+}
+
+.import-market-title:first-of-type {
+  margin-top: 0;
+}
+
+.import-market-total {
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.import-row.sub {
+  padding: 6px 0 6px 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.import-row.sub:last-child {
+  border-bottom: none;
+}
+
+.import-row.sub span:last-child {
+  color: var(--text);
+  font-weight: 600;
+}

@@ -70,15 +70,9 @@ async function initDatabase() {
 
 // ===== Утилиты =====
 
-// Универсальное преобразование даты в YYYY-MM-DD.
-// Поддерживает:
-//   - Date-подобные объекты (включая созданные в другом контексте SheetJS)
-//   - Excel serial number
-//   - Строки: ISO, DD.MM.YYYY, «Mon Jan 08 2024 ...»
 function toIsoDate(v) {
   if (v == null || v === '') return null;
 
-  // 1. Date-подобный объект — duck typing, не instanceof
   if (typeof v === 'object' && typeof v.getFullYear === 'function') {
     const y = v.getFullYear();
     const m = String(v.getMonth() + 1).padStart(2, '0');
@@ -86,9 +80,7 @@ function toIsoDate(v) {
     return `${y}-${m}-${d}`;
   }
 
-  // 2. Excel serial number
   if (typeof v === 'number') {
-    // 25569 = дней между 1970-01-01 и 1900-01-01 (с учётом особенности Excel)
     const ms = Math.round((v - 25569) * 86400) * 1000;
     const d = new Date(ms);
     if (isNaN(d.getTime())) return null;
@@ -98,17 +90,12 @@ function toIsoDate(v) {
     return `${y}-${m}-${day}`;
   }
 
-  // 3. Строка
   const s = String(v).trim();
-
-  // ISO: 2024-01-08 или 2024-01-08T00:00:00
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
 
-  // DD.MM.YYYY
   let m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
   if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
 
-  // toString() от Date: «Mon Jan 08 2024 23:59:43 GMT+0300»
   const months = {
     Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06',
     Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12'
@@ -161,7 +148,6 @@ function parseCashOperations(workbook) {
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
 
-  // Ищем шапку
   let headerRow = -1;
   let cols = null;
   for (let r = range.s.r; r <= range.e.r; r++) {
@@ -170,20 +156,18 @@ function parseCashOperations(workbook) {
   }
 
   if (headerRow < 0) {
-    return { operations: [], errors: ['Таблица «Движение денежных средств» не найдена'], marketStats: {}, typeStats: {}, period: null };
+    return { operations: [], errors: ['Таблица «Движение денежных средств» не найдена'], marketBreakdown: {}, period: null };
   }
 
   const operations = [];
   const errors = [];
-  const marketStats = {};
-  const typeStats = {};
+  const marketBreakdown = {};
   let market = null;
   let emptyRun = 0;
   let firstDate = null;
   let lastDate = null;
 
   for (let r = headerRow + 1; r <= range.e.r; r++) {
-    // Храним НАТИВНЫЕ значения ячеек (Date, number, string)
     const rowCells = {};
     const nonEmptyVals = [];
     for (let c = range.s.c; c <= range.e.c; c++) {
@@ -194,7 +178,6 @@ function parseCashOperations(workbook) {
     }
     const rowText = nonEmptyVals.join(' ').replace(/\s+/g, ' ');
 
-    // 1. РАЗДЕЛИТЕЛЬ РЫНКА — 1–2 непустые ячейки, начинается с «Основной/Срочный/Внебиржевой рынок»
     if (nonEmptyVals.length >= 1 && nonEmptyVals.length <= 2) {
       const joined = nonEmptyVals.join(' ');
       if (/^(Основной|Срочный|Внебиржевой)\s+рынок/i.test(joined)) {
@@ -206,7 +189,6 @@ function parseCashOperations(workbook) {
       }
     }
 
-    // 2. Пустая строка
     if (nonEmptyVals.length === 0) {
       emptyRun++;
       if (emptyRun >= 5) break;
@@ -214,7 +196,6 @@ function parseCashOperations(workbook) {
     }
     emptyRun = 0;
 
-    // 3. Шапка следующей таблицы
     const headerHits = [
       'Наименование ценной бумаги',
       'Дата и время заключения',
@@ -224,14 +205,12 @@ function parseCashOperations(workbook) {
     ].filter(h => rowText.includes(h)).length;
     if (headerHits >= 2) break;
 
-    // 4. Значения по колонкам
     const dateVal = rowCells[cols.date];
     const sumVal = rowCells[cols.sum];
     const currVal = rowCells[cols.currency];
     const typeVal = rowCells[cols.type];
     const commentVal = cols.comment >= 0 ? rowCells[cols.comment] : null;
 
-    // 5. Дата
     const isoDate = toIsoDate(dateVal);
     if (!isoDate) {
       if (typeVal || sumVal) {
@@ -240,7 +219,6 @@ function parseCashOperations(workbook) {
       continue;
     }
 
-    // 6. Сумма
     const kopecks = toKopecks(sumVal);
     if (kopecks == null) {
       errors.push(`Строка ${r + 1}: не распознана сумма «${String(sumVal)}»`);
@@ -263,23 +241,22 @@ function parseCashOperations(workbook) {
     op.external_hash = makeCashHash(op);
     operations.push(op);
 
-    const mKey = market || '—';
-    marketStats[mKey] = (marketStats[mKey] || 0) + 1;
-
+    // Группировка market → type
+    const mKey = market || 'Без рынка';
     const tKey = opType || '—';
-    typeStats[tKey] = (typeStats[tKey] || 0) + 1;
+    if (!marketBreakdown[mKey]) marketBreakdown[mKey] = {};
+    marketBreakdown[mKey][tKey] = (marketBreakdown[mKey][tKey] || 0) + 1;
 
     if (!firstDate || isoDate < firstDate) firstDate = isoDate;
     if (!lastDate || isoDate > lastDate) lastDate = isoDate;
   }
 
-  console.log('[parser] Операций:', operations.length, '· рынков:', Object.keys(marketStats).join(', '));
+  console.log('[parser] Операций:', operations.length, '· рынков:', Object.keys(marketBreakdown).join(', '));
 
   return {
     operations,
     errors,
-    marketStats,
-    typeStats,
+    marketBreakdown,
     period: firstDate ? { from: firstDate, to: lastDate } : null
   };
 }
@@ -310,6 +287,41 @@ function setPreview(html, isError = false) {
   el.style.borderLeft = isError ? '4px solid var(--negative)' : '4px solid var(--primary)';
 }
 
+// Порядок рынков для отображения
+const MARKET_ORDER = {
+  'Основной рынок': 0,
+  'Срочный рынок': 1,
+  'Внебиржевой рынок': 2,
+  'Без рынка': 99
+};
+
+function buildMarketBreakdownHtml(marketBreakdown) {
+  const entries = Object.entries(marketBreakdown).sort((a, b) => {
+    const ao = MARKET_ORDER[a[0]] ?? 50;
+    const bo = MARKET_ORDER[b[0]] ?? 50;
+    return ao - bo;
+  });
+
+  if (entries.length === 0) {
+    return '<div class="import-row"><span>—</span><span>0</span></div>';
+  }
+
+  return entries.map(([mkt, types]) => {
+    const total = Object.values(types).reduce((s, v) => s + v, 0);
+    const typeRows = Object.entries(types)
+      .sort((a, b) => b[1] - a[1])
+      .map(([t, c]) => `<div class="import-row sub"><span>${t}</span><span>${c}</span></div>`)
+      .join('');
+    return `
+      <div class="import-market-title">
+        <span>${mkt}</span>
+        <span class="import-market-total">${total}</span>
+      </div>
+      ${typeRows}
+    `;
+  }).join('');
+}
+
 function buildCashPreview(fileName, workbook, parsed) {
   const typeLabel = {
     tax: 'Налоговый отчёт',
@@ -326,16 +338,7 @@ function buildCashPreview(fileName, workbook, parsed) {
   const opsCount = parsed.operations.length;
   const periodHtml = parsed.period ? `${parsed.period.from} → ${parsed.period.to}` : '<i>нет данных</i>';
 
-  const marketRows = Object.entries(parsed.marketStats)
-    .sort((a, b) => b[1] - a[1])
-    .map(([k, v]) => `<div class="import-row"><span>${k}</span><span>${v}</span></div>`)
-    .join('') || '<div class="import-row"><span>—</span><span>0</span></div>';
-
-  const typeRows = Object.entries(parsed.typeStats)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 12)
-    .map(([k, v]) => `<div class="import-row"><span>${k}</span><span>${v}</span></div>`)
-    .join('') || '<div class="import-row"><span>—</span><span>0</span></div>';
+  const marketBreakdownHtml = buildMarketBreakdownHtml(parsed.marketBreakdown);
 
   const sampleRows = parsed.operations.slice(0, 10).map(op => `
     <div class="op-row">
@@ -371,11 +374,8 @@ function buildCashPreview(fileName, workbook, parsed) {
     <div class="import-big">${opsCount}</div>
     <div class="import-row"><span>Период</span><span>${periodHtml}</span></div>
 
-    <div class="import-section-title">По рынкам</div>
-    ${marketRows}
-
-    <div class="import-section-title">По типам операций</div>
-    ${typeRows}
+    <div class="import-section-title">По рынкам и типам операций</div>
+    ${marketBreakdownHtml}
 
     ${opsCount > 0 ? `
       <div class="import-section-title">Первые 10 операций</div>
