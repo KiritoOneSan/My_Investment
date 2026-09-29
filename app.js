@@ -833,6 +833,20 @@ function setPreview(html, isError = false) {
   el.style.borderLeft = isError ? '4px solid var(--negative)' : '4px solid var(--primary)';
 }
 
+// Оборачивает блок в сворачиваемый <details>
+function wrapCollapsible(title, summary, contentHtml) {
+  if (!contentHtml) return '';
+  return `
+    <details class="preview-block">
+      <summary class="preview-block-header">
+        <span class="preview-block-title">${title}</span>
+        <span class="preview-block-summary">${summary}</span>
+      </summary>
+      <div class="preview-block-body">${contentHtml}</div>
+    </details>
+  `;
+}
+
 const MARKET_ORDER = {
   'Основной рынок': 0, 'Срочный рынок': 1, 'Внебиржевой рынок': 2, 'Без рынка': 99
 };
@@ -899,6 +913,7 @@ function buildSampleOperationsHtml(operations) {
 
 function buildSecuritiesPreviewHtml(sec) {
   if (sec.positions.length === 0) return '';
+
   const typeStatsHtml = sortByPaperOrder(Object.keys(sec.typeStats))
     .map(t => `<div class="import-row sub"><span>${t}</span><span>${sec.typeStats[t]}</span></div>`)
     .join('');
@@ -928,23 +943,24 @@ function buildSecuritiesPreviewHtml(sec) {
     `;
   }).join('');
 
-  return `
-    <div class="import-section-title">Остатки ценных бумаг</div>
-    <div class="import-big">${sec.positions.length}</div>
-
+  const content = `
+    <div class="import-row"><span>Позиций всего</span><span>${sec.positions.length}</span></div>
+    <div class="import-row"><span>Итоговая стоимость</span><span><b>${formatRub(sec.totalValueKopecks)}</b></span></div>
     <div class="import-section-title">По типам</div>
     ${typeStatsHtml}
-
-    <div class="import-section-title">Итоговая стоимость портфеля</div>
-    <div class="import-big">${formatRub(sec.totalValueKopecks)}</div>
-
     <div class="import-section-title">Примеры позиций (по 5 на тип)</div>
     ${paperRows}
   `;
+
+  return wrapCollapsible(
+    'Остатки ценных бумаг',
+    `${sec.positions.length} · ${formatRub(sec.totalValueKopecks)}`,
+    content
+  );
 }
 
 function buildTradesPreviewHtml(tr) {
-  if (tr.trades.length === 0) return '';
+  if (!tr || tr.trades.length === 0) return '';
 
   const marketRows = sortByMarketOrder(Object.keys(tr.marketBreakdown))
     .map(mkt => `<div class="import-row sub"><span>${mkt}</span><span>${tr.marketBreakdown[mkt]}</span></div>`)
@@ -971,24 +987,25 @@ function buildTradesPreviewHtml(tr) {
     </div>
   `).join('');
 
-  return `
-    <div class="import-section-title">Сделки с ценными бумагами</div>
-    <div class="import-big">${tr.trades.length}</div>
+  const content = `
     ${tr.duplicates > 0 ? `<div class="import-row"><span>Удалено дубликатов</span><span>${tr.duplicates}</span></div>` : ''}
-
     <div class="import-section-title">По рынкам</div>
     ${marketRows || '<div class="import-row sub"><span>—</span><span>0</span></div>'}
-
     <div class="import-section-title">По видам сделок</div>
     ${typeRows || '<div class="import-row sub"><span>—</span><span>0</span></div>'}
-
     <div class="import-section-title">Первые 5 сделок</div>
     <div class="op-list">${sampleRows}</div>
   `;
+
+  const summaryText = tr.duplicates > 0
+    ? `${tr.trades.length} (+${tr.duplicates} дубл.)`
+    : `${tr.trades.length}`;
+
+  return wrapCollapsible('Сделки с ценными бумагами', summaryText, content);
 }
 
 function buildMovementsPreviewHtml(mv) {
-  if (mv.movements.length === 0) return '';
+  if (!mv || mv.movements.length === 0) return '';
 
   const typeRows = Object.entries(mv.typeStats)
     .sort((a, b) => b[1] - a[1])
@@ -1008,16 +1025,14 @@ function buildMovementsPreviewHtml(mv) {
     </div>
   `).join('');
 
-  return `
-    <div class="import-section-title">Движение ценных бумаг</div>
-    <div class="import-big">${mv.movements.length}</div>
-
+  const content = `
     <div class="import-section-title">По типам операций</div>
     ${typeRows}
-
     <div class="import-section-title">Первые 5 операций</div>
     <div class="op-list">${sampleRows}</div>
   `;
+
+  return wrapCollapsible('Движение ценных бумаг', `${mv.movements.length}`, content);
 }
 
 function buildFuturesTradesPreviewHtml(ft) {
@@ -1052,18 +1067,15 @@ function buildFuturesTradesPreviewHtml(ft) {
        </div>`
     : '';
 
-  return `
-    <div class="import-section-title">Сделки по производным (фьючерсы, опционы)</div>
-    <div class="import-big">${ft.trades.length}</div>
-
+  const content = `
     <div class="import-section-title">По видам сделок</div>
     ${typeRows}
-
     <div class="import-section-title">Первые 5 сделок</div>
     <div class="op-list">${sampleRows}</div>
-
     ${errorsHtml}
   `;
+
+  return wrapCollapsible('Сделки по производным', `${ft.trades.length}`, content);
 }
 
 function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures) {
@@ -1081,26 +1093,53 @@ function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrade
 
   const opsCount = parsedCash.operations.length;
   const periodHtml = parsedCash.period ? `${parsedCash.period.from} → ${parsedCash.period.to}` : '<i>нет данных</i>';
+
+  // Блок 1: Остатки ЦБ
+  const securitiesHtml = parsedSec ? buildSecuritiesPreviewHtml(parsedSec) : '';
+
+  // Блок 2: Движение ЦБ
+  const movementsHtml = parsedMv ? buildMovementsPreviewHtml(parsedMv) : '';
+
+  // Блок 3: Сделки с ЦБ
+  const tradesHtml = parsedTrades ? buildTradesPreviewHtml(parsedTrades) : '';
+
+  // Блок 4: Сделки по производным
+  const futuresHtml = parsedFutures ? buildFuturesTradesPreviewHtml(parsedFutures) : '';
+
+  // Блок 5: Денежные операции
   const marketBreakdownHtml = buildMarketBreakdownHtml(parsedCash.marketBreakdown);
   const sampleOperationsHtml = buildSampleOperationsHtml(parsedCash.operations);
-  const securitiesHtml = parsedSec ? buildSecuritiesPreviewHtml(parsedSec) : '';
-  const tradesHtml = parsedTrades ? buildTradesPreviewHtml(parsedTrades) : '';
-  const movementsHtml = parsedMv ? buildMovementsPreviewHtml(parsedMv) : '';
-  const futuresHtml = parsedFutures ? buildFuturesTradesPreviewHtml(parsedFutures) : '';
+
+  const cashContent = `
+    <div class="import-row"><span>Период</span><span>${periodHtml}</span></div>
+    <div class="import-section-title">По рынкам и типам операций</div>
+    ${marketBreakdownHtml}
+    ${opsCount > 0 ? `
+      <div class="import-section-title">Примеры операций (по 5 на каждый рынок)</div>
+      ${sampleOperationsHtml}
+    ` : ''}
+  `;
+  const cashHtml = wrapCollapsible('Денежные операции', `${opsCount}`, cashContent);
 
   const allErrors = [
     ...parsedCash.errors,
     ...(parsedSec ? parsedSec.errors : []),
     ...(parsedTrades ? parsedTrades.errors : []),
-    ...(parsedMv ? parsedMv.errors : [])
+    ...(parsedMv ? parsedMv.errors : []),
+    ...(parsedFutures ? parsedFutures.errors : [])
   ];
 
   const errorsHtml = allErrors.length
-    ? `<div class="import-errors">
-         <div class="import-headers-label">Ошибки (${allErrors.length}):</div>
-         ${allErrors.slice(0, 5).map(e => `<div class="import-error">${e}</div>`).join('')}
-         ${allErrors.length > 5 ? `<div class="import-note">…и ещё ${allErrors.length - 5}</div>` : ''}
-       </div>`
+    ? `<details class="preview-block preview-block-error">
+         <summary class="preview-block-header">
+           <span class="preview-block-title">Ошибки</span>
+           <span class="preview-block-summary">${allErrors.length}</span>
+         </summary>
+         <div class="preview-block-body">
+           ${allErrors.slice(0, 10).map(e => `<div class="import-error">${e}</div>`).join('')}
+           ${allErrors.length > 10 ? `<div class="import-note">…и ещё ${allErrors.length - 10}</div>` : ''}
+         </div>
+       </details>`
     : '';
 
   return `
@@ -1110,31 +1149,15 @@ function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrade
     <ul class="import-sheets">${sheetsInfo}</ul>
 
     ${securitiesHtml}
-
     ${movementsHtml}
-
     ${tradesHtml}
-
     ${futuresHtml}
-
-    <div class="import-section-title">Найдено денежных операций</div>
-    <div class="import-big">${opsCount}</div>
-    <div class="import-row"><span>Период</span><span>${periodHtml}</span></div>
-
-    <div class="import-section-title">По рынкам и типам операций</div>
-    ${marketBreakdownHtml}
-
-    ${opsCount > 0 ? `
-      <div class="import-section-title">Примеры операций (по 5 на каждый рынок)</div>
-      ${sampleOperationsHtml}
-    ` : ''}
-
+    ${cashHtml}
     ${errorsHtml}
 
     <div class="import-note">Проверьте данные. Запись в базу будет на следующем шаге.</div>
   `;
 }
-
 async function handleFile(file) {
   if (!file) return;
   setPreview('<div class="placeholder">Чтение файла...</div>');
