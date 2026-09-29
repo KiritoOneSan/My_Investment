@@ -807,6 +807,375 @@ function parseFuturesTrades(workbook) {
   return { trades, errors, typeStats };
 }
 
+// ===== Парсер 1: Метаданные отчёта =====
+
+function parseReportMetadata(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+
+  const meta = {
+    broker: null,
+    period_from: null,
+    period_to: null,
+    client: null,
+    inn: null,
+    contract: null,
+    subaccount: null,
+    account_number: null,
+    report_date: null,
+    cny_start_rate: null,
+    cny_end_rate: null
+  };
+
+  const maxRow = Math.min(range.e.r, 30);
+
+  for (let r = range.s.r; r <= maxRow; r++) {
+    const rowCells = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      rowCells.push(cell && cell.v != null ? String(cell.v).trim() : '');
+    }
+    const joined = rowCells.filter(x => x).join(' | ');
+    if (!joined) continue;
+
+    // Заголовок: "Отчет Банка X за период с DD.MM.YYYY по DD.MM.YYYY ..."
+    if (!meta.broker) {
+      const m = joined.match(/Отчет\s+(.+?)\s+за\s+период\s+с\s+(\d{2}\.\d{2}\.\d{4})\s+по\s+(\d{2}\.\d{2}\.\d{4})/i);
+      if (m) {
+        meta.broker = m[1].trim();
+        meta.period_from = m[2];
+        meta.period_to = m[3];
+      }
+    }
+
+    // Курсы CNY
+    if (!meta.cny_start_rate) {
+      const m = joined.match(/Курс\s+CNY\s+на\s+начальную\s+дату\s+отч[её]та\s+([\d.,]+).*?Курс\s+CNY\s+на\s+конечную\s+дату\s+отч[её]та\s+([\d.,]+)/i);
+      if (m) {
+        meta.cny_start_rate = parseFloat(m[1].replace(',', '.'));
+        meta.cny_end_rate = parseFloat(m[2].replace(',', '.'));
+      }
+    }
+
+    // Метки в первой непустой ячейке
+    let label = '';
+    let labelCol = -1;
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      if (cell && cell.v != null && String(cell.v).trim() !== '') {
+        label = String(cell.v).trim();
+        labelCol = c;
+        break;
+      }
+    }
+    if (!label) continue;
+
+    // Значение — в следующей непустой ячейке этой же строки
+    let value = null;
+    for (let c = labelCol + 1; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      if (cell && cell.v != null && String(cell.v).trim() !== '') {
+        value = String(cell.v).trim();
+        break;
+      }
+    }
+
+    if (/^Клиент:?$/i.test(label) && !meta.client) meta.client = value;
+    else if (/^ИНН:?$/i.test(label) && !meta.inn) meta.inn = value;
+    else if (/^№\s+и\s+дата\s+Соглашения/i.test(label) && !meta.contract) meta.contract = value;
+    else if (/^№\s+субсчета:?$/i.test(label) && !meta.subaccount) meta.subaccount = value;
+    else if (/^Лицевой\s+счет/i.test(label) && !meta.account_number) meta.account_number = value;
+    else if (/^Дата\s+формирования\s+отчета/i.test(label) && !meta.report_date) {
+      meta.report_date = toIsoDate(value) || value;
+    }
+  }
+
+  // Дополнительный поиск ИНН, если он в отдельной ячейке
+  if (!meta.inn) {
+    const walker = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+    for (let r = walker.s.r; r <= Math.min(walker.e.r, 20); r++) {
+      for (let c = walker.s.c; c <= walker.e.c; c++) {
+        const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+        if (cell && cell.v && /^ИНН:?$/i.test(String(cell.v).trim())) {
+          for (let cc = c + 1; cc <= walker.e.c; cc++) {
+            const cell2 = sheet[XLSX.utils.encode_cell({ r, c: cc })];
+            if (cell2 && cell2.v != null && /^\d{10,12}$/.test(String(cell2.v).trim())) {
+              meta.inn = String(cell2.v).trim();
+              break;
+            }
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  return meta;
+}
+
+// ===== Парсер 2: Сводная информация по субсчёту =====
+
+function parseAccountSummary(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+
+  let headerRow = -1;
+  let cols = { desc: -1, sum: -1, curr: -1, value: -1 };
+
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    let foundDesc = false, foundSum = false, foundCurr = false, foundValue = false;
+    const tmp = { desc: -1, sum: -1, curr: -1, value: -1 };
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      const v = cell ? String(cell.v || '').trim() : '';
+      if (/^Описание$/i.test(v)) { tmp.desc = c; foundDesc = true; }
+      else if (/^Сумма$/i.test(v)) { tmp.sum = c; foundSum = true; }
+      else if (/^Валюта$/i.test(v)) { tmp.curr = c; foundCurr = true; }
+      else if (/^Оценка\s+по\s+Курсу/i.test(v)) { tmp.value = c; foundValue = true; }
+    }
+    if (foundDesc && foundSum && foundCurr && foundValue) {
+      headerRow = r;
+      cols = tmp;
+      break;
+    }
+  }
+
+  if (headerRow < 0) return { items: [], errors: ['Таблица «Сводная информация по субсчёту» не найдена'] };
+
+  const items = [];
+  const errors = [];
+  let emptyRun = 0;
+
+  for (let r = headerRow + 1; r <= range.e.r; r++) {
+    const descCell = sheet[XLSX.utils.encode_cell({ r, c: cols.desc })];
+    const sumCell = sheet[XLSX.utils.encode_cell({ r, c: cols.sum })];
+    const currCell = sheet[XLSX.utils.encode_cell({ r, c: cols.curr })];
+    const valueCell = cols.value >= 0 ? sheet[XLSX.utils.encode_cell({ r, c: cols.value })] : null;
+
+    const desc = descCell ? String(descCell.v || '').trim() : '';
+    const sum = sumCell ? toNumber(sumCell.v) : null;
+    const currency = currCell ? String(currCell.v || '').trim().toUpperCase() : '';
+    const valueKopecks = valueCell ? toKopecks(valueCell.v) : null;
+
+    if (/^Отч[её]т\s+об\s+остатках/i.test(desc) || /^Движение\s+денежных/i.test(desc)) break;
+
+    if (!desc && sum == null && !currency) {
+      emptyRun++;
+      if (emptyRun >= 3) break;
+      continue;
+    }
+    emptyRun = 0;
+    if (!desc) continue;
+
+    items.push({
+      description: desc,
+      amount: sum,
+      currency: currency,
+      value_rub_kopecks: valueKopecks,
+      row: r + 1
+    });
+  }
+
+  return { items, errors };
+}
+
+// ===== Парсер 3: Отчёт об остатках денежных средств =====
+
+function parseCashBalances(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+
+  // Ищем строку с "Валюта" + "Входящий остаток"
+  let titleRow = -1;
+  outer:
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      const v = cell ? String(cell.v || '').trim() : '';
+      if (/^Валюта$/i.test(v)) {
+        for (let cc = c + 1; cc <= Math.min(c + 5, range.e.c); cc++) {
+          const cell2 = sheet[XLSX.utils.encode_cell({ r, c: cc })];
+          if (cell2 && /Входящий\s+остаток/i.test(String(cell2.v || ''))) {
+            titleRow = r;
+            break outer;
+          }
+        }
+      }
+    }
+  }
+  if (titleRow < 0) return { rows: [], errors: ['Таблица «Отчёт об остатках денежных средств» не найдена'] };
+
+  // Ищем строку подзаголовков (Основной рынок / Срочный / Внебирж / Итого)
+  let subRow = -1;
+  for (let rr = titleRow + 1; rr <= Math.min(titleRow + 3, range.e.r); rr++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: rr, c })];
+      const v = cell ? String(cell.v || '').trim() : '';
+      if (/^Основной\s+рынок$/i.test(v)) { subRow = rr; break; }
+    }
+    if (subRow >= 0) break;
+  }
+
+  // Собираем индексы колонок "Итого" (в подзаголовке их несколько: входящий, исходящий)
+  const totalCols = [];
+  if (subRow >= 0) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: subRow, c })];
+      const v = cell ? String(cell.v || '').trim() : '';
+      if (/^Итого$/i.test(v)) totalCols.push(c);
+    }
+  }
+
+  const rows = [];
+  const errors = [];
+  let emptyRun = 0;
+
+  for (let r = (subRow >= 0 ? subRow : titleRow) + 1; r <= range.e.r; r++) {
+    // Первая непустая ячейка строки
+    let firstVal = '';
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      if (cell && cell.v != null && String(cell.v).trim() !== '') {
+        firstVal = String(cell.v).trim();
+        break;
+      }
+    }
+    if (!firstVal) {
+      emptyRun++;
+      if (emptyRun >= 3) break;
+      continue;
+    }
+    emptyRun = 0;
+
+    if (/^Движение\s+денежных/i.test(firstVal) || /^Отч[её]т\s+об\s+остатках\s+ценных/i.test(firstVal)) break;
+
+    const isCurrency = /^[A-Z]{3}$/.test(firstVal);
+    const isSumRow = /^Сумма\s+денежных\s+средств/i.test(firstVal);
+    if (!isCurrency && !isSumRow) continue;
+
+    const totals = totalCols.map(c => {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      return cell ? toNumber(cell.v) : null;
+    });
+
+    rows.push({
+      label: firstVal,
+      is_total: isSumRow,
+      totals: totals,
+      row: r + 1
+    });
+  }
+
+  return { rows, totalCols, errors };
+}
+
+// ===== Парсер 4: Открытые позиции по производным =====
+
+function parseFuturesPositions(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+
+  let headerRow = -1;
+  const cols = { code: -1, incoming: -1, added: -1, removed: -1, executed: -1,
+                 outgoing: -1, go: -1, margin: -1, expiration: -1 };
+
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    let foundCode = false;
+    const tmp = { code: -1, incoming: -1, added: -1, removed: -1, executed: -1,
+                  outgoing: -1, go: -1, margin: -1, expiration: -1 };
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      const v = cell ? String(cell.v || '').trim() : '';
+      if (/^Фьючерсный\s+контракт/i.test(v)) { tmp.code = c; foundCode = true; }
+      else if (/^Входящий\s+остаток/i.test(v) && tmp.incoming < 0) tmp.incoming = c;
+      else if (/^Зачислено/i.test(v) && tmp.added < 0) tmp.added = c;
+      else if (/^Списано/i.test(v) && tmp.removed < 0) tmp.removed = c;
+      else if (/^Исполнено/i.test(v) && tmp.executed < 0) tmp.executed = c;
+      else if (/^Исходящий\s+остаток/i.test(v) && tmp.outgoing < 0) tmp.outgoing = c;
+      else if (/^Биржевое\s+ГО/i.test(v) && tmp.go < 0) tmp.go = c;
+      else if (/^Вариационная\s+маржа/i.test(v) && tmp.margin < 0) tmp.margin = c;
+      else if (/^Дата\s+экспирации/i.test(v) && tmp.expiration < 0) tmp.expiration = c;
+    }
+    if (foundCode && tmp.margin >= 0) {
+      headerRow = r;
+      Object.assign(cols, tmp);
+      break;
+    }
+  }
+
+  if (headerRow < 0) return { positions: [], go_total: null, free_cash: null, errors: ['Таблица «Открытые позиции по производным» не найдена'] };
+
+  const positions = [];
+  const errors = [];
+  let go_total = null;
+  let free_cash = null;
+  let emptyRun = 0;
+
+  const getCell = (r, c) => {
+    if (c < 0) return null;
+    const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+    return cell ? cell.v : null;
+  };
+
+  for (let r = headerRow + 1; r <= range.e.r; r++) {
+    let rowFirstVal = '';
+    let rowFirstCol = -1;
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      if (cell && cell.v != null && String(cell.v).trim() !== '') {
+        rowFirstVal = String(cell.v).trim();
+        rowFirstCol = c;
+        break;
+      }
+    }
+
+    if (!rowFirstVal) {
+      emptyRun++;
+      if (emptyRun >= 3) break;
+      continue;
+    }
+    emptyRun = 0;
+
+    if (/^Заключенные\s+в\s+отчетном/i.test(rowFirstVal) ||
+        /^Завершенные\s+в\s+отчетном/i.test(rowFirstVal) ||
+        /^Сделки\s+с\s+ценными/i.test(rowFirstVal)) break;
+
+    if (/^Итоговая\s+величина\s+ГО/i.test(rowFirstVal)) {
+      for (let c = rowFirstCol + 1; c <= range.e.c; c++) {
+        const v = getCell(r, c);
+        if (typeof v === 'number') { go_total = v; break; }
+      }
+      continue;
+    }
+
+    if (/^Свободный\s+остаток/i.test(rowFirstVal)) {
+      for (let c = rowFirstCol + 1; c <= range.e.c; c++) {
+        const v = getCell(r, c);
+        if (typeof v === 'number') { free_cash = v; break; }
+      }
+      continue;
+    }
+
+    const contractCode = rowFirstVal;
+    if (!/^[A-Z]+-\d+\.\d+$/i.test(contractCode)) continue;
+
+    positions.push({
+      contract_code: contractCode,
+      incoming_qty: toNumber(getCell(r, cols.incoming)),
+      added_qty: toNumber(getCell(r, cols.added)),
+      removed_qty: toNumber(getCell(r, cols.removed)),
+      executed_qty: toNumber(getCell(r, cols.executed)),
+      outgoing_qty: toNumber(getCell(r, cols.outgoing)),
+      go: toNumber(getCell(r, cols.go)),
+      margin: toNumber(getCell(r, cols.margin)),
+      expiration_date: toIsoDate(getCell(r, cols.expiration)),
+      row: r + 1
+    });
+  }
+
+  return { positions, go_total, free_cash, errors };
+}
+
 // ===== Импорт =====
 
 function detectReportType(workbook) {
@@ -1078,7 +1447,114 @@ function buildFuturesTradesPreviewHtml(ft) {
   return wrapCollapsible('Сделки по производным', `${ft.trades.length}`, content);
 }
 
-function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures) {
+// ===== Preview 1: Метаданные отчёта =====
+
+function buildMetadataPreviewHtml(meta) {
+  if (!meta) return '';
+  const rows = [];
+  if (meta.broker) rows.push(`<div class="import-row"><span>Брокер</span><span>${meta.broker}</span></div>`);
+  if (meta.period_from) rows.push(`<div class="import-row"><span>Период</span><span>${meta.period_from} → ${meta.period_to}</span></div>`);
+  if (meta.client) rows.push(`<div class="import-row"><span>Клиент</span><span>${meta.client}</span></div>`);
+  if (meta.inn) rows.push(`<div class="import-row"><span>ИНН</span><span>${meta.inn}</span></div>`);
+  if (meta.contract) rows.push(`<div class="import-row"><span>Соглашение</span><span>${meta.contract}</span></div>`);
+  if (meta.subaccount) rows.push(`<div class="import-row"><span>Субсчёт</span><span>${meta.subaccount}</span></div>`);
+  if (meta.account_number) rows.push(`<div class="import-row"><span>Лицевой счёт</span><span>${meta.account_number}</span></div>`);
+  if (meta.report_date) rows.push(`<div class="import-row"><span>Дата формирования</span><span>${meta.report_date}</span></div>`);
+  if (meta.cny_start_rate != null) rows.push(`<div class="import-row"><span>Курс CNY на начало</span><span>${meta.cny_start_rate}</span></div>`);
+  if (meta.cny_end_rate != null) rows.push(`<div class="import-row"><span>Курс CNY на конец</span><span>${meta.cny_end_rate}</span></div>`);
+
+  if (rows.length === 0) return '';
+
+  const summary = meta.subaccount ? `Субсчёт ${meta.subaccount}` : 'инфо';
+
+  return wrapCollapsible('Метаданные отчёта', summary, rows.join(''));
+}
+
+// ===== Preview 2: Сводная информация по субсчёту =====
+
+function buildAccountSummaryPreviewHtml(sum) {
+  if (!sum || sum.items.length === 0) return '';
+
+  const rows = sum.items.map(it => `
+    <div class="import-row">
+      <span>${it.description}</span>
+      <span>${it.amount != null ? formatNum(it.amount, 2) : '—'} ${it.currency}</span>
+    </div>
+  `).join('');
+
+  return wrapCollapsible('Сводная информация по субсчёту', `${sum.items.length} строк`, rows);
+}
+
+// ===== Preview 3: Остатки денежных средств =====
+
+function buildCashBalancesPreviewHtml(bal) {
+  if (!bal || bal.rows.length === 0) return '';
+
+  const rowsHtml = bal.rows.map(row => {
+    // totals — массив из значений в колонках «Итого»
+    // Обычно это [входящий_итого, исходящий_итого, плановый_исходящий]
+    const t = row.totals;
+    const incoming = t[0];
+    const outgoing = t[1];
+    const planned = t[2];
+
+    const incomingStr = incoming != null ? formatNum(incoming, 2) : '—';
+    const outgoingStr = outgoing != null ? formatNum(outgoing, 2) : '—';
+    const plannedStr = planned != null ? formatNum(planned, 2) : '—';
+
+    return `
+      <div class="import-row sub">
+        <span><b>${row.label}</b></span>
+        <span></span>
+      </div>
+      <div class="import-row sub">
+        <span style="padding-left: 24px">Входящий</span>
+        <span>${incomingStr}</span>
+      </div>
+      <div class="import-row sub">
+        <span style="padding-left: 24px">Исходящий</span>
+        <span>${outgoingStr}</span>
+      </div>
+      <div class="import-row sub">
+        <span style="padding-left: 24px">Плановый исходящий</span>
+        <span>${plannedStr}</span>
+      </div>
+    `;
+  }).join('');
+
+  return wrapCollapsible('Остатки денежных средств', `${bal.rows.length} валют`, rowsHtml);
+}
+
+// ===== Preview 4: Открытые позиции по производным =====
+
+function buildFuturesPositionsPreviewHtml(fp) {
+  if (!fp || fp.positions.length === 0) return '';
+
+  const positionsHtml = fp.positions.map(p => `
+    <div class="pos-row">
+      <div class="pos-name">${p.contract_code}</div>
+      <div class="pos-meta">
+        Вход ${formatNum(p.incoming_qty, 0)} → Выход ${formatNum(p.outgoing_qty, 0)}
+        ${p.margin != null ? ` · маржа ${formatNum(p.margin, 2)}` : ''}
+        ${p.expiration_date ? ` · экспирация ${p.expiration_date}` : ''}
+      </div>
+    </div>
+  `).join('');
+
+  const extraRows = [];
+  if (fp.go_total != null) extraRows.push(`<div class="import-row"><span>Итоговая величина ГО</span><span>${formatNum(fp.go_total, 2)}</span></div>`);
+  if (fp.free_cash != null) extraRows.push(`<div class="import-row"><span>Свободный остаток</span><span>${formatNum(fp.free_cash, 2)}</span></div>`);
+
+  const content = `
+    ${extraRows.join('')}
+    <div class="import-section-title">Позиции</div>
+    <div class="pos-list">${positionsHtml}</div>
+  `;
+
+  return wrapCollapsible('Открытые позиции по производным', `${fp.positions.length}`, content);
+}
+
+function function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures, parsedMeta, parsedSummary, parsedBalances, parsedFuturesPositions) {
   const typeLabel = {
     tax: 'Налоговый отчёт',
     brokerage: 'Отчёт о сделках и счетах',
@@ -1097,6 +1573,11 @@ function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrade
   // Блок 1: Остатки ЦБ
   const securitiesHtml = parsedSec ? buildSecuritiesPreviewHtml(parsedSec) : '';
 
+  const metaHtml = parsedMeta ? buildMetadataPreviewHtml(parsedMeta) : '';
+  const summaryHtml = parsedSummary ? buildAccountSummaryPreviewHtml(parsedSummary) : '';
+  const balancesHtml = parsedBalances ? buildCashBalancesPreviewHtml(parsedBalances) : '';
+  const futuresPositionsHtml = parsedFuturesPositions ? buildFuturesPositionsPreviewHtml(parsedFuturesPositions) : '';
+  
   // Блок 2: Движение ЦБ
   const movementsHtml = parsedMv ? buildMovementsPreviewHtml(parsedMv) : '';
 
@@ -1148,10 +1629,14 @@ function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrade
     <div class="import-row"><span>Листов</span><span>${workbook.SheetNames.length}</span></div>
     <ul class="import-sheets">${sheetsInfo}</ul>
 
+    ${metaHtml}
+    ${summaryHtml}
+    ${balancesHtml}
     ${securitiesHtml}
     ${movementsHtml}
     ${tradesHtml}
     ${futuresHtml}
+    ${futuresPositionsHtml}
     ${cashHtml}
     ${errorsHtml}
 
@@ -1177,18 +1662,31 @@ async function handleFile(file) {
       return;
     }
     if (reportType === 'brokerage') {
-      const parsedCash = parseCashOperations(workbook);
+      const parsedMeta = parseReportMetadata(workbook);
+      const parsedSummary = parseAccountSummary(workbook);
+      const parsedBalances = parseCashBalances(workbook);
       const parsedSec = parseSecurities(workbook);
-      const parsedTrades = parseTrades(workbook);
       const parsedMv = parseSecuritiesMovement(workbook);
+      const parsedTrades = parseTrades(workbook);
       const parsedFutures = parseFuturesTrades(workbook);
-      console.log('[parser] Операций:', parsedCash.operations.length,
-                  '· ЦБ:', parsedSec.positions.length,
-                  '· сделок:', parsedTrades.trades.length,
-                  '(дубликатов:', parsedTrades.duplicates, ')',
-                  '· движение:', parsedMv.movements.length,
-                  '· фьючерсы:', parsedFutures.trades.length);
-      setPreview(buildCashPreview(file.name, workbook, parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures));
+      const parsedFuturesPositions = parseFuturesPositions(workbook);
+      const parsedCash = parseCashOperations(workbook);
+
+      console.log('[parser] Метаданные:', parsedMeta);
+      console.log('[parser] Сводка по субсчёту:', parsedSummary.items.length);
+      console.log('[parser] Остатки денег:', parsedBalances.rows.length);
+      console.log('[parser] ЦБ:', parsedSec.positions.length);
+      console.log('[parser] Движение ЦБ:', parsedMv.movements.length);
+      console.log('[parser] Сделки:', parsedTrades.trades.length, '(дубл.:', parsedTrades.duplicates, ')');
+      console.log('[parser] Фьючерсы (сделки):', parsedFutures.trades.length);
+      console.log('[parser] Фьючерсы (позиции):', parsedFuturesPositions.positions.length);
+      console.log('[parser] Операции:', parsedCash.operations.length);
+
+      setPreview(buildCashPreview(
+        file.name, workbook,
+        parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures,
+        parsedMeta, parsedSummary, parsedBalances, parsedFuturesPositions
+      ));
       return;
     }
     setPreview(`<div class="import-file-name">📄 ${file.name}</div><div class="import-error">Не удалось определить тип отчёта</div>`, true);
