@@ -42,14 +42,11 @@ function navigate(screenKey, addToHistory = true) {
 
 function goBack() {
   const prev = history.pop();
-  if (prev) {
-    navigate(prev, false);
-  } else {
-    navigate('more', false);
-  }
+  if (prev) navigate(prev, false);
+  else navigate('more', false);
 }
 
-// ===== Инициализация базы данных =====
+// ===== База =====
 function setDbStatus(text, isError = false) {
   const el = document.getElementById('dbStatus');
   if (el) {
@@ -61,9 +58,9 @@ function setDbStatus(text, isError = false) {
 async function initDatabase() {
   try {
     setDbStatus('Инициализация...');
-    const msg = await window.db.init();
+    await window.db.init();
     const accounts = await window.db.select('SELECT * FROM accounts');
-    console.log('[db] Готово. Счетов в базе:', accounts.length);
+    console.log('[db] Готово. Счетов:', accounts.length);
     setDbStatus('OK · счетов: ' + accounts.length);
   } catch (err) {
     console.error('[db] Ошибка:', err);
@@ -71,19 +68,15 @@ async function initDatabase() {
   }
 }
 
-// ===== Утилиты парсинга =====
+// ===== Утилиты =====
 
-// Даты: Date / Excel serial / ISO / DD.MM.YYYY → YYYY-MM-DD
 function toIsoDate(v) {
   if (v == null || v === '') return null;
-  if (v instanceof Date) {
-    return v.toISOString().slice(0, 10);
-  }
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
   if (typeof v === 'number') {
     const ms = (v - 25569) * 86400 * 1000;
     const d = new Date(ms);
-    if (isNaN(d.getTime())) return null;
-    return d.toISOString().slice(0, 10);
+    return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
   }
   const s = String(v).trim();
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
@@ -92,20 +85,25 @@ function toIsoDate(v) {
   return null;
 }
 
-// Деньги: 1234.56 → 123456 копеек
 function toKopecks(v) {
   if (v == null || v === '') return null;
   const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/\s/g, '').replace(',', '.'));
-  if (isNaN(n)) return null;
-  return Math.round(n * 100);
+  return isNaN(n) ? null : Math.round(n * 100);
 }
 
-// Хеш для дедупликации денежной операции
 function makeCashHash(op) {
   return [op.operation_date, op.amount_kopecks, op.currency, op.operation_type, op.comment || ''].join('|');
 }
 
-// Ищем строку с шапкой «Дата | Сумма | Валюта | Тип операции | Комментарий»
+function formatRub(kopecks) {
+  if (kopecks == null) return '—';
+  const rub = kopecks / 100;
+  const s = Math.abs(rub).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return (rub < 0 ? '−' : '') + s;
+}
+
+// ===== Парсер «Движение денежных средств» =====
+
 function findCashHeaderRow(sheet, r, range) {
   let dateCol = -1, sumCol = -1, currCol = -1, typeCol = -1, commentCol = -1;
   for (let c = range.s.c; c <= range.e.c; c++) {
@@ -123,7 +121,6 @@ function findCashHeaderRow(sheet, r, range) {
   return null;
 }
 
-// Парсим «Движение денежных средств» из листа отчёта о сделках
 function parseCashOperations(workbook) {
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
@@ -150,51 +147,56 @@ function parseCashOperations(workbook) {
   let lastDate = null;
 
   for (let r = headerRow + 1; r <= range.e.r; r++) {
-    const dateCell = sheet[XLSX.utils.encode_cell({ r, c: cols.date })];
-    const sumCell = sheet[XLSX.utils.encode_cell({ r, c: cols.sum })];
-    const currCell = sheet[XLSX.utils.encode_cell({ r, c: cols.currency })];
-    const typeCell = sheet[XLSX.utils.encode_cell({ r, c: cols.type })];
-    const commentCell = cols.comment >= 0 ? sheet[XLSX.utils.encode_cell({ r, c: cols.comment })] : null;
-
-    const dateVal = dateCell ? dateCell.v : null;
-    const sumVal = sumCell ? sumCell.v : null;
-    const currVal = currCell ? currCell.v : null;
-    const typeVal = typeCell ? typeCell.v : null;
-    const commentVal = commentCell ? commentCell.v : null;
-
-    const rowArr = [];
+    // Собираем значения всей строки
+    const rowCells = {};
+    const nonEmptyVals = [];
     for (let c = range.s.c; c <= range.e.c; c++) {
       const cell = sheet[XLSX.utils.encode_cell({ r, c })];
-      rowArr.push(cell ? String(cell.v || '') : '');
+      const v = cell && cell.v != null ? String(cell.v).trim() : '';
+      rowCells[c] = v;
+      if (v !== '') nonEmptyVals.push(v);
     }
-    const rowText = rowArr.join('|');
+    const rowText = nonEmptyVals.join(' ').replace(/\s+/g, ' ');
 
-    const isEmpty = [dateVal, sumVal, currVal, typeVal].every(v => v == null || String(v).trim() === '');
-    if (isEmpty) {
+    // 1. РАЗДЕЛИТЕЛЬ РЫНКА — до всех остальных проверок.
+    // Разделитель обычно состоит из 1–2 непустых ячеек и содержит ключевое слово.
+    if (nonEmptyVals.length >= 1 && nonEmptyVals.length <= 2) {
+      const joined = nonEmptyVals.join(' ');
+      if (/^(Основной|Срочный|Внебиржевой)\s+рынок/i.test(joined)) {
+        if (/Основной/i.test(joined)) market = 'Основной рынок';
+        else if (/Срочный/i.test(joined)) market = 'Срочный рынок';
+        else if (/Внебирж/i.test(joined)) market = 'Внебиржевой рынок';
+        console.log('[parser] Раздел:', market, '(строка', r + 1, ')');
+        continue;
+      }
+    }
+
+    // 2. Пустая строка
+    if (nonEmptyVals.length === 0) {
       emptyRun++;
       if (emptyRun >= 5) break;
       continue;
     }
     emptyRun = 0;
 
-    // Разделитель рынка — одна непустая ячейка с ключевым словом
-    const firstNonEmpty = rowArr.find(v => v.trim() !== '') || '';
-    if (!dateVal && !sumVal && /рынок/i.test(firstNonEmpty)) {
-      market = firstNonEmpty.trim();
-      continue;
-    }
-
-    // Признак начала следующей таблицы
+    // 3. Шапка следующей таблицы
     const headerHits = [
       'Наименование ценной бумаги',
       'Дата и время заключения',
-      'Площадка',
       'Входящий остаток',
-      'Валюта цены'
+      'Валюта цены',
+      'Площадка'
     ].filter(h => rowText.includes(h)).length;
     if (headerHits >= 2) break;
 
-    // Парсим дату
+    // 4. Достаём значения по колонкам
+    const dateVal = rowCells[cols.date];
+    const sumVal = rowCells[cols.sum];
+    const currVal = rowCells[cols.currency];
+    const typeVal = rowCells[cols.type];
+    const commentVal = cols.comment >= 0 ? rowCells[cols.comment] : '';
+
+    // 5. Дата
     const isoDate = toIsoDate(dateVal);
     if (!isoDate) {
       if (typeVal || sumVal) {
@@ -203,7 +205,7 @@ function parseCashOperations(workbook) {
       continue;
     }
 
-    // Парсим сумму
+    // 6. Сумма
     const kopecks = toKopecks(sumVal);
     if (kopecks == null) {
       errors.push(`Строка ${r + 1}: не распознана сумма «${sumVal}»`);
@@ -236,6 +238,8 @@ function parseCashOperations(workbook) {
     if (!lastDate || isoDate > lastDate) lastDate = isoDate;
   }
 
+  console.log('[parser] Операций:', operations.length, '· рынков:', Object.keys(marketStats).join(', '));
+
   return {
     operations,
     errors,
@@ -245,19 +249,11 @@ function parseCashOperations(workbook) {
   };
 }
 
-// Форматирование копеек в рубли для отображения
-function formatRub(kopecks) {
-  if (kopecks == null) return '—';
-  const rub = kopecks / 100;
-  const s = Math.abs(rub).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  return (rub < 0 ? '−' : '') + s;
-}
+// ===== Импорт =====
 
-// ===== Импорт .xlsx =====
 function detectReportType(workbook) {
   const sheetName = workbook.SheetNames[0] || '';
   const sheet = workbook.Sheets[sheetName];
-
   const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
   const maxRow = Math.min(range.e.r, 5);
   let firstText = '';
@@ -267,13 +263,8 @@ function detectReportType(workbook) {
       if (cell && cell.v) firstText += ' ' + String(cell.v);
     }
   }
-
-  if (sheetName === 'Сводный налоговый отчет' || /налогооблагаем/i.test(firstText)) {
-    return 'tax';
-  }
-  if (sheetName === 'brokerage_report' || /о сделках, операциях и состоянии счетов/i.test(firstText)) {
-    return 'brokerage';
-  }
+  if (sheetName === 'Сводный налоговый отчет' || /налогооблагаем/i.test(firstText)) return 'tax';
+  if (sheetName === 'brokerage_report' || /о сделках, операциях и состоянии счетов/i.test(firstText)) return 'brokerage';
   return 'unknown';
 }
 
@@ -285,12 +276,11 @@ function setPreview(html, isError = false) {
 }
 
 function buildCashPreview(fileName, workbook, parsed) {
-  const type = detectReportType(workbook);
   const typeLabel = {
     tax: 'Налоговый отчёт',
     brokerage: 'Отчёт о сделках и счетах',
     unknown: 'Неизвестный тип'
-  }[type];
+  }[detectReportType(workbook)];
 
   const sheetsInfo = workbook.SheetNames.map(name => {
     const sheet = workbook.Sheets[name];
@@ -298,37 +288,36 @@ function buildCashPreview(fileName, workbook, parsed) {
     return `<li><b>${name}</b> — ${range.e.r + 1} строк, ${range.e.c + 1} колонок</li>`;
   }).join('');
 
-  // Сводка по операциям
   const opsCount = parsed.operations.length;
-  const periodHtml = parsed.period
-    ? `${parsed.period.from} → ${parsed.period.to}`
-    : '<i>нет данных</i>';
+  const periodHtml = parsed.period ? `${parsed.period.from} → ${parsed.period.to}` : '<i>нет данных</i>';
 
-  // Разбивка по рынкам
   const marketRows = Object.entries(parsed.marketStats)
+    .sort((a, b) => b[1] - a[1])
     .map(([k, v]) => `<div class="import-row"><span>${k}</span><span>${v}</span></div>`)
     .join('') || '<div class="import-row"><span>—</span><span>0</span></div>';
 
-  // Разбивка по типам (топ-10)
   const typeRows = Object.entries(parsed.typeStats)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
+    .slice(0, 12)
     .map(([k, v]) => `<div class="import-row"><span>${k}</span><span>${v}</span></div>`)
     .join('') || '<div class="import-row"><span>—</span><span>0</span></div>';
 
-  // Первые 10 операций
   const sampleRows = parsed.operations.slice(0, 10).map(op => `
     <div class="op-row">
-      <div class="op-date">${op.date}${op.market ? ' · ' + op.market : ''}</div>
-      <div class="op-main">
-        <div class="op-type">${op.operation_type}</div>
-        <div class="op-comment">${op.comment || '—'}</div>
+      <div class="op-header">
+        <span class="op-date">${op.date}</span>
+        ${op.market ? `<span class="op-market">${op.market}</span>` : ''}
       </div>
-      <div class="op-amount ${op.amount_kopecks < 0 ? 'negative' : 'positive'}">${formatRub(op.amount_kopecks)}</div>
+      <div class="op-body">
+        <div class="op-left">
+          <div class="op-type">${op.operation_type || '—'}</div>
+          ${op.comment ? `<div class="op-comment">${op.comment}</div>` : ''}
+        </div>
+        <div class="op-amount ${op.amount_kopecks < 0 ? 'negative' : 'positive'}">${formatRub(op.amount_kopecks)}</div>
+      </div>
     </div>
   `).join('');
 
-  // Ошибки (первые 5)
   const errorsHtml = parsed.errors.length
     ? `<div class="import-errors">
          <div class="import-headers-label">Ошибки (${parsed.errors.length}):</div>
@@ -345,7 +334,7 @@ function buildCashPreview(fileName, workbook, parsed) {
 
     <div class="import-section-title">Найдено денежных операций</div>
     <div class="import-big">${opsCount}</div>
-    <div class="import-row"><span>Период операций</span><span>${periodHtml}</span></div>
+    <div class="import-row"><span>Период</span><span>${periodHtml}</span></div>
 
     <div class="import-section-title">По рынкам</div>
     ${marketRows}
@@ -366,40 +355,34 @@ function buildCashPreview(fileName, workbook, parsed) {
 
 async function handleFile(file) {
   if (!file) return;
-
   setPreview('<div class="placeholder">Чтение файла...</div>');
 
   try {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-    console.log('[xlsx] Прочитан:', file.name, 'Листов:', workbook.SheetNames.length);
+    console.log('[xlsx] Прочитан:', file.name);
 
     const reportType = detectReportType(workbook);
     if (reportType === 'tax') {
       setPreview(`
         <div class="import-file-name">📄 ${file.name}</div>
         <div class="import-row"><span>Тип отчёта</span><span>Налоговый отчёт</span></div>
-        <div class="import-note">Парсер налогового отчёта будет на следующем подэтапе (3.3).</div>
+        <div class="import-note">Парсер налогового отчёта будет на подэтапе 3.3.</div>
       `);
       return;
     }
-
     if (reportType === 'brokerage') {
       const parsed = parseCashOperations(workbook);
-      console.log('[parser] Найдено операций:', parsed.operations.length, 'Ошибок:', parsed.errors.length);
+      console.log('[parser] Операций:', parsed.operations.length, '· ошибок:', parsed.errors.length);
       setPreview(buildCashPreview(file.name, workbook, parsed));
       return;
     }
-
-    setPreview(`
-      <div class="import-file-name">📄 ${file.name}</div>
-      <div class="import-error">Не удалось определить тип отчёта</div>
-    `, true);
+    setPreview(`<div class="import-file-name">📄 ${file.name}</div><div class="import-error">Не удалось определить тип отчёта</div>`, true);
   } catch (err) {
     console.error('[xlsx] Ошибка:', err);
     setPreview(
       `<div class="import-file-name">📄 ${file.name}</div>
-       <div class="import-error">Ошибка чтения файла: ${err.message}</div>`,
+       <div class="import-error">Ошибка: ${err.message}</div>`,
       true
     );
   }
@@ -407,8 +390,6 @@ async function handleFile(file) {
 
 // ===== Обработчики =====
 document.addEventListener('DOMContentLoaded', () => {
-
-  // ₽ → SVG
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   const nodes = [];
   while (walker.nextNode()) {
@@ -434,13 +415,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => navigate(btn.dataset.nav));
   });
-
   document.querySelectorAll('.menu-item').forEach(btn => {
     btn.addEventListener('click', () => navigate(btn.dataset.nav));
   });
-
   document.getElementById('backBtn').addEventListener('click', goBack);
-
   document.querySelectorAll('.toggle').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.toggle').forEach(b => b.classList.remove('active'));
@@ -466,7 +444,6 @@ document.addEventListener('DOMContentLoaded', () => {
 window.addEventListener('popstate', () => {
   if (!screens[currentScreen].isRoot) goBack();
 });
-
 history.pushState({}, '');
 window.addEventListener('popstate', () => {
   if (!screens[currentScreen].isRoot) {
