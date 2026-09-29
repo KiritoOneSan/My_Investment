@@ -1554,7 +1554,7 @@ function buildFuturesPositionsPreviewHtml(fp) {
   return wrapCollapsible('Открытые позиции по производным', `${fp.positions.length}`, content);
 }
 
-function function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures, parsedMeta, parsedSummary, parsedBalances, parsedFuturesPositions) {
+function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures, parsedMeta, parsedSummary, parsedBalances, parsedFuturesPositions) {
   const typeLabel = {
     tax: 'Налоговый отчёт',
     brokerage: 'Отчёт о сделках и счетах',
