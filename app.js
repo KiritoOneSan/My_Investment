@@ -71,14 +71,193 @@ async function initDatabase() {
   }
 }
 
-// ===== Импорт .xlsx — Этап 3.1 =====
+// ===== Утилиты парсинга =====
 
-// Определение типа отчёта по имени листа и содержимому
+// Даты: Date / Excel serial / ISO / DD.MM.YYYY → YYYY-MM-DD
+function toIsoDate(v) {
+  if (v == null || v === '') return null;
+  if (v instanceof Date) {
+    return v.toISOString().slice(0, 10);
+  }
+  if (typeof v === 'number') {
+    const ms = (v - 25569) * 86400 * 1000;
+    const d = new Date(ms);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString().slice(0, 10);
+  }
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return null;
+}
+
+// Деньги: 1234.56 → 123456 копеек
+function toKopecks(v) {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/\s/g, '').replace(',', '.'));
+  if (isNaN(n)) return null;
+  return Math.round(n * 100);
+}
+
+// Хеш для дедупликации денежной операции
+function makeCashHash(op) {
+  return [op.operation_date, op.amount_kopecks, op.currency, op.operation_type, op.comment || ''].join('|');
+}
+
+// Ищем строку с шапкой «Дата | Сумма | Валюта | Тип операции | Комментарий»
+function findCashHeaderRow(sheet, r, range) {
+  let dateCol = -1, sumCol = -1, currCol = -1, typeCol = -1, commentCol = -1;
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+    const v = cell ? String(cell.v || '').trim() : '';
+    if (/^Дата$/i.test(v)) dateCol = c;
+    else if (/^Сумма$/i.test(v)) sumCol = c;
+    else if (/^Валюта$/i.test(v)) currCol = c;
+    else if (/^Тип операции$/i.test(v)) typeCol = c;
+    else if (/^Комментарий$/i.test(v)) commentCol = c;
+  }
+  if (dateCol >= 0 && sumCol >= 0 && currCol >= 0 && typeCol >= 0) {
+    return { date: dateCol, sum: sumCol, currency: currCol, type: typeCol, comment: commentCol };
+  }
+  return null;
+}
+
+// Парсим «Движение денежных средств» из листа отчёта о сделках
+function parseCashOperations(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+
+  // Ищем шапку
+  let headerRow = -1;
+  let cols = null;
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const idx = findCashHeaderRow(sheet, r, range);
+    if (idx) { headerRow = r; cols = idx; break; }
+  }
+
+  if (headerRow < 0) {
+    return { operations: [], errors: ['Таблица «Движение денежных средств» не найдена'], marketStats: {}, typeStats: {}, period: null };
+  }
+
+  const operations = [];
+  const errors = [];
+  const marketStats = {};
+  const typeStats = {};
+  let market = null;
+  let emptyRun = 0;
+  let firstDate = null;
+  let lastDate = null;
+
+  for (let r = headerRow + 1; r <= range.e.r; r++) {
+    const dateCell = sheet[XLSX.utils.encode_cell({ r, c: cols.date })];
+    const sumCell = sheet[XLSX.utils.encode_cell({ r, c: cols.sum })];
+    const currCell = sheet[XLSX.utils.encode_cell({ r, c: cols.currency })];
+    const typeCell = sheet[XLSX.utils.encode_cell({ r, c: cols.type })];
+    const commentCell = cols.comment >= 0 ? sheet[XLSX.utils.encode_cell({ r, c: cols.comment })] : null;
+
+    const dateVal = dateCell ? dateCell.v : null;
+    const sumVal = sumCell ? sumCell.v : null;
+    const currVal = currCell ? currCell.v : null;
+    const typeVal = typeCell ? typeCell.v : null;
+    const commentVal = commentCell ? commentCell.v : null;
+
+    const rowArr = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      rowArr.push(cell ? String(cell.v || '') : '');
+    }
+    const rowText = rowArr.join('|');
+
+    const isEmpty = [dateVal, sumVal, currVal, typeVal].every(v => v == null || String(v).trim() === '');
+    if (isEmpty) {
+      emptyRun++;
+      if (emptyRun >= 5) break;
+      continue;
+    }
+    emptyRun = 0;
+
+    // Разделитель рынка — одна непустая ячейка с ключевым словом
+    const firstNonEmpty = rowArr.find(v => v.trim() !== '') || '';
+    if (!dateVal && !sumVal && /рынок/i.test(firstNonEmpty)) {
+      market = firstNonEmpty.trim();
+      continue;
+    }
+
+    // Признак начала следующей таблицы
+    const headerHits = [
+      'Наименование ценной бумаги',
+      'Дата и время заключения',
+      'Площадка',
+      'Входящий остаток',
+      'Валюта цены'
+    ].filter(h => rowText.includes(h)).length;
+    if (headerHits >= 2) break;
+
+    // Парсим дату
+    const isoDate = toIsoDate(dateVal);
+    if (!isoDate) {
+      if (typeVal || sumVal) {
+        errors.push(`Строка ${r + 1}: не распознана дата «${dateVal}»`);
+      }
+      continue;
+    }
+
+    // Парсим сумму
+    const kopecks = toKopecks(sumVal);
+    if (kopecks == null) {
+      errors.push(`Строка ${r + 1}: не распознана сумма «${sumVal}»`);
+      continue;
+    }
+
+    const currency = String(currVal || 'RUB').trim().toUpperCase();
+    const opType = String(typeVal || '').trim();
+    const comment = commentVal != null ? String(commentVal).trim() : '';
+
+    const op = {
+      date: isoDate,
+      amount_kopecks: kopecks,
+      currency: currency,
+      operation_type: opType,
+      comment: comment,
+      market: market,
+      row: r + 1
+    };
+    op.external_hash = makeCashHash(op);
+    operations.push(op);
+
+    const mKey = market || '—';
+    marketStats[mKey] = (marketStats[mKey] || 0) + 1;
+
+    const tKey = opType || '—';
+    typeStats[tKey] = (typeStats[tKey] || 0) + 1;
+
+    if (!firstDate || isoDate < firstDate) firstDate = isoDate;
+    if (!lastDate || isoDate > lastDate) lastDate = isoDate;
+  }
+
+  return {
+    operations,
+    errors,
+    marketStats,
+    typeStats,
+    period: firstDate ? { from: firstDate, to: lastDate } : null
+  };
+}
+
+// Форматирование копеек в рубли для отображения
+function formatRub(kopecks) {
+  if (kopecks == null) return '—';
+  const rub = kopecks / 100;
+  const s = Math.abs(rub).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return (rub < 0 ? '−' : '') + s;
+}
+
+// ===== Импорт .xlsx =====
 function detectReportType(workbook) {
   const sheetName = workbook.SheetNames[0] || '';
   const sheet = workbook.Sheets[sheetName];
 
-  // Пробуем найти ключевые заголовки в первых 5 строках
   const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
   const maxRow = Math.min(range.e.r, 5);
   let firstText = '';
@@ -98,8 +277,14 @@ function detectReportType(workbook) {
   return 'unknown';
 }
 
-// Простой предпросмотр структуры файла
-function buildPreview(fileName, workbook) {
+function setPreview(html, isError = false) {
+  const el = document.getElementById('importPreview');
+  if (!el) return;
+  el.innerHTML = html;
+  el.style.borderLeft = isError ? '4px solid var(--negative)' : '4px solid var(--primary)';
+}
+
+function buildCashPreview(fileName, workbook, parsed) {
   const type = detectReportType(workbook);
   const typeLabel = {
     tax: 'Налоговый отчёт',
@@ -107,55 +292,76 @@ function buildPreview(fileName, workbook) {
     unknown: 'Неизвестный тип'
   }[type];
 
-  // Собираем инфо по листам
   const sheetsInfo = workbook.SheetNames.map(name => {
     const sheet = workbook.Sheets[name];
     const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
-    const rows = range.e.r + 1;
-    const cols = range.e.c + 1;
-    return `<li><b>${name}</b> — ${rows} строк, ${cols} колонок</li>`;
+    return `<li><b>${name}</b> — ${range.e.r + 1} строк, ${range.e.c + 1} колонок</li>`;
   }).join('');
 
-  // Находим верхнюю строку-заголовок (первую непустую)
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
-  let headersRow = -1;
-  for (let r = 0; r <= Math.min(range.e.r, 30); r++) {
-    let nonEmpty = 0;
-    for (let c = 0; c <= range.e.c; c++) {
-      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
-      if (cell && cell.v !== undefined && cell.v !== null && String(cell.v).trim() !== '') nonEmpty++;
-    }
-    if (nonEmpty >= 3) { headersRow = r; break; }
-  }
+  // Сводка по операциям
+  const opsCount = parsed.operations.length;
+  const periodHtml = parsed.period
+    ? `${parsed.period.from} → ${parsed.period.to}`
+    : '<i>нет данных</i>';
 
-  let headersHtml = '<i>заголовки не найдены</i>';
-  if (headersRow >= 0) {
-    const headers = [];
-    for (let c = 0; c <= range.e.c; c++) {
-      const cell = sheet[XLSX.utils.encode_cell({ r: headersRow, c })];
-      const v = cell && cell.v !== undefined ? String(cell.v).trim() : '';
-      if (v) headers.push(v);
-    }
-    headersHtml = headers.map(h => `<span class="chip">${h}</span>`).join(' ');
-  }
+  // Разбивка по рынкам
+  const marketRows = Object.entries(parsed.marketStats)
+    .map(([k, v]) => `<div class="import-row"><span>${k}</span><span>${v}</span></div>`)
+    .join('') || '<div class="import-row"><span>—</span><span>0</span></div>';
+
+  // Разбивка по типам (топ-10)
+  const typeRows = Object.entries(parsed.typeStats)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([k, v]) => `<div class="import-row"><span>${k}</span><span>${v}</span></div>`)
+    .join('') || '<div class="import-row"><span>—</span><span>0</span></div>';
+
+  // Первые 10 операций
+  const sampleRows = parsed.operations.slice(0, 10).map(op => `
+    <div class="op-row">
+      <div class="op-date">${op.date}${op.market ? ' · ' + op.market : ''}</div>
+      <div class="op-main">
+        <div class="op-type">${op.operation_type}</div>
+        <div class="op-comment">${op.comment || '—'}</div>
+      </div>
+      <div class="op-amount ${op.amount_kopecks < 0 ? 'negative' : 'positive'}">${formatRub(op.amount_kopecks)}</div>
+    </div>
+  `).join('');
+
+  // Ошибки (первые 5)
+  const errorsHtml = parsed.errors.length
+    ? `<div class="import-errors">
+         <div class="import-headers-label">Ошибки (${parsed.errors.length}):</div>
+         ${parsed.errors.slice(0, 5).map(e => `<div class="import-error">${e}</div>`).join('')}
+         ${parsed.errors.length > 5 ? `<div class="import-note">…и ещё ${parsed.errors.length - 5}</div>` : ''}
+       </div>`
+    : '';
 
   return `
     <div class="import-file-name">📄 ${fileName}</div>
     <div class="import-row"><span>Тип отчёта</span><span>${typeLabel}</span></div>
-    <div class="import-row"><span>Листов в файле</span><span>${workbook.SheetNames.length}</span></div>
+    <div class="import-row"><span>Листов</span><span>${workbook.SheetNames.length}</span></div>
     <ul class="import-sheets">${sheetsInfo}</ul>
-    <div class="import-headers-label">Первые заголовки:</div>
-    <div class="import-headers">${headersHtml}</div>
-    <div class="import-note">Парсинг данных будет на следующем подэтапе.</div>
-  `;
-}
 
-function setPreview(html, isError = false) {
-  const el = document.getElementById('importPreview');
-  if (!el) return;
-  el.innerHTML = html;
-  el.style.borderLeft = isError ? '4px solid var(--negative)' : '4px solid var(--primary)';
+    <div class="import-section-title">Найдено денежных операций</div>
+    <div class="import-big">${opsCount}</div>
+    <div class="import-row"><span>Период операций</span><span>${periodHtml}</span></div>
+
+    <div class="import-section-title">По рынкам</div>
+    ${marketRows}
+
+    <div class="import-section-title">По типам операций</div>
+    ${typeRows}
+
+    ${opsCount > 0 ? `
+      <div class="import-section-title">Первые 10 операций</div>
+      <div class="op-list">${sampleRows}</div>
+    ` : ''}
+
+    ${errorsHtml}
+
+    <div class="import-note">Проверьте данные. Запись в базу будет на следующем шаге.</div>
+  `;
 }
 
 async function handleFile(file) {
@@ -168,8 +374,27 @@ async function handleFile(file) {
     const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
     console.log('[xlsx] Прочитан:', file.name, 'Листов:', workbook.SheetNames.length);
 
-    const html = buildPreview(file.name, workbook);
-    setPreview(html);
+    const reportType = detectReportType(workbook);
+    if (reportType === 'tax') {
+      setPreview(`
+        <div class="import-file-name">📄 ${file.name}</div>
+        <div class="import-row"><span>Тип отчёта</span><span>Налоговый отчёт</span></div>
+        <div class="import-note">Парсер налогового отчёта будет на следующем подэтапе (3.3).</div>
+      `);
+      return;
+    }
+
+    if (reportType === 'brokerage') {
+      const parsed = parseCashOperations(workbook);
+      console.log('[parser] Найдено операций:', parsed.operations.length, 'Ошибок:', parsed.errors.length);
+      setPreview(buildCashPreview(file.name, workbook, parsed));
+      return;
+    }
+
+    setPreview(`
+      <div class="import-file-name">📄 ${file.name}</div>
+      <div class="import-error">Не удалось определить тип отчёта</div>
+    `, true);
   } catch (err) {
     console.error('[xlsx] Ошибка:', err);
     setPreview(
@@ -183,7 +408,7 @@ async function handleFile(file) {
 // ===== Обработчики =====
 document.addEventListener('DOMContentLoaded', () => {
 
-  // Заменяем символ ₽ на SVG-иконку
+  // ₽ → SVG
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   const nodes = [];
   while (walker.nextNode()) {
@@ -206,20 +431,16 @@ document.addEventListener('DOMContentLoaded', () => {
     node.parentNode.replaceChild(frag, node);
   });
 
-  // Нижняя навигация
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => navigate(btn.dataset.nav));
   });
 
-  // Пункты меню "Ещё"
   document.querySelectorAll('.menu-item').forEach(btn => {
     btn.addEventListener('click', () => navigate(btn.dataset.nav));
   });
 
-  // Кнопка "Назад"
   document.getElementById('backBtn').addEventListener('click', goBack);
 
-  // Переключатель "Сводно / По счетам"
   document.querySelectorAll('.toggle').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.toggle').forEach(b => b.classList.remove('active'));
@@ -227,13 +448,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Стартовый экран
   navigate('summary');
-
-  // Инициализация базы
   initDatabase();
 
-  // Импорт файла
   const importBtn = document.getElementById('importBtn');
   const fileInput = document.getElementById('fileInput');
   if (importBtn && fileInput) {
@@ -241,17 +458,13 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInput.addEventListener('change', (e) => {
       const file = e.target.files && e.target.files[0];
       handleFile(file);
-      // Сбрасываем input, чтобы можно было выбрать тот же файл повторно
       e.target.value = '';
     });
   }
 });
 
-// ===== Обработка системной кнопки "Назад" на Android =====
 window.addEventListener('popstate', () => {
-  if (!screens[currentScreen].isRoot) {
-    goBack();
-  }
+  if (!screens[currentScreen].isRoot) goBack();
 });
 
 history.pushState({}, '');

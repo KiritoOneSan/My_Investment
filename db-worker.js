@@ -1,7 +1,6 @@
 // db-worker.js
 // Web Worker: SQLite WASM + OPFS-SAH-Pool VFS
 
-// Локальная библиотека (лежит в lib/sqlite3.mjs)
 import sqlite3InitModule from './lib/sqlite3.mjs';
 
 let db = null;
@@ -9,6 +8,16 @@ let poolUtil = null;
 
 const DB_FILE = '/investments.db';
 const POOL_NAME = 'investments-pool';
+
+// Добавляет колонку, если её ещё нет
+function ensureColumn(tableName, columnName, columnType) {
+  const cols = db.selectObjects(`PRAGMA table_info(${tableName})`);
+  const exists = cols.some(c => c.name === columnName);
+  if (!exists) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
+    console.log(`[migration] Добавлена колонка ${tableName}.${columnName}`);
+  }
+}
 
 async function initDb() {
   if (db) return 'База уже открыта';
@@ -59,7 +68,8 @@ async function initDb() {
       amount_kopecks INTEGER NOT NULL,
       nkd_kopecks INTEGER,
       commission_kopecks INTEGER,
-      counterparty TEXT
+      counterparty TEXT,
+      market TEXT
     );
 
     CREATE TABLE IF NOT EXISTS lots (
@@ -88,7 +98,9 @@ async function initDb() {
       operation_type TEXT NOT NULL,
       amount_kopecks INTEGER NOT NULL,
       currency TEXT NOT NULL,
-      comment TEXT
+      comment TEXT,
+      market TEXT,
+      external_hash TEXT UNIQUE
     );
 
     CREATE TABLE IF NOT EXISTS payments (
@@ -153,6 +165,11 @@ async function initDb() {
       value TEXT
     );
   `);
+
+  // Миграции (для баз, созданных до 3.2.1)
+  ensureColumn('trades', 'market', 'TEXT');
+  ensureColumn('cash_operations', 'market', 'TEXT');
+  ensureColumn('cash_operations', 'external_hash', 'TEXT');
 
   const count = db.selectValue('SELECT COUNT(*) FROM accounts');
   if (count === 0) {
