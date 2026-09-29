@@ -1,7 +1,8 @@
 // db-worker.js
 // Web Worker: SQLite WASM + OPFS-SAH-Pool VFS
 
-import sqlite3InitModule from 'https://cdn.jsdelivr.net/npm/@sqlite.org/sqlite-wasm@3.46.0-build2/sqlite-wasm/jswasm/sqlite3.mjs';
+// Локальная библиотека (лежит в lib/sqlite3.mjs)
+import sqlite3InitModule from './lib/sqlite3.mjs';
 
 let db = null;
 let poolUtil = null;
@@ -153,7 +154,6 @@ async function initDb() {
     );
   `);
 
-  // Счёт по умолчанию, если таблица пуста
   const count = db.selectValue('SELECT COUNT(*) FROM accounts');
   if (count === 0) {
     db.exec("INSERT INTO accounts (code, name, currency) VALUES ('MAIN', 'Основной счёт', 'RUB')");

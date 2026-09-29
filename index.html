@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'">
   <meta name="theme-color" content="#0d6e4f">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=5">
+  <link rel="stylesheet" href="style.css?v=6">
   <title>Инвестиции</title>
 </head>
 <body>
@@ -237,9 +238,9 @@
     </button>
   </nav>
 
-  <!-- SheetJS: чтение .xlsx -->
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-  <script src="db.js?v=5"></script>
-  <script src="app.js?v=5"></script>
+  <!-- Локальные библиотеки -->
+  <script src="lib/xlsx.full.min.js"></script>
+  <script src="db.js?v=6"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
