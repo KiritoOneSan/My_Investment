@@ -421,12 +421,27 @@ function detectMarketDivider(nonEmptyVals) {
   return null;
 }
 
-// Проверяем, что строка — начало другой таблицы
+// Проверяем, что строка — начало другой таблицы или заголовок
 function isOtherTableHeader(rowText) {
   return /Наименование\s+ценной\s+бумаги/i.test(rowText) ||
          /Входящий\s+остаток/i.test(rowText) ||
          /Движение\s+ценных\s+бумаг/i.test(rowText) ||
-         /Отч[её]т\s+об\s+остатках/i.test(rowText);
+         /Отч[её]т\s+об\s+остатках/i.test(rowText) ||
+         /Фьючерсный\s+контракт/i.test(rowText) ||
+         /Сделки\s+с\s+Производными/i.test(rowText) ||
+         /Дата\s+и\s+время\s+заключения\s+сделки/i.test(rowText);
+}
+
+// Проверяем, что конкретная ячейка выглядит как заголовок таблицы
+function isHeaderCellValue(v) {
+  if (!v) return false;
+  return /^Дата\s+и\s+время\s+заключения/i.test(v) ||
+         /^Наименование\s+ценной\s+бумаги/i.test(v) ||
+         /^Фьючерсный\s+контракт/i.test(v) ||
+         /^Вид\s+сделки$/i.test(v) ||
+         /^Количество\s*\(/i.test(v) ||
+         /^№\s+сделки$/i.test(v) ||
+         /^Валюта\s+расч[её]тов$/i.test(v);
 }
 
 function parseTradesInSheet(sheet, range, startRow) {
@@ -446,8 +461,11 @@ function parseTradesInSheet(sheet, range, startRow) {
     const { cols } = h;
     let market = null;
     let emptyRun = 0;
+    let stop = false;
 
     for (let r = h.row + 1; r <= range.e.r; r++) {
+      if (stop) break;
+
       const rowCells = {};
       const nonEmpty = [];
       for (let c = range.s.c; c <= range.e.c; c++) {
@@ -459,8 +477,13 @@ function parseTradesInSheet(sheet, range, startRow) {
       }
       const rowText = nonEmpty.map(x => x.v).join(' ').replace(/\s+/g, ' ');
 
-      // Конец таблицы — новый заголовок чужой таблицы
-      if (isOtherTableHeader(rowText) || findTradesHeaderRow(sheet, r, range)) break;
+      // 1. Стоп на следующей таблице / заголовке
+      if (isOtherTableHeader(rowText)) break;
+      if (findTradesHeaderRow(sheet, r, range)) break;
+
+      // 2. Стоп, если какая-то ячейка — это заголовок другой таблицы
+      //    (например, таблицы производных инструментов)
+      if (nonEmpty.some(x => isHeaderCellValue(x.v))) break;
 
       if (nonEmpty.length === 0) {
         emptyRun++;
@@ -488,7 +511,7 @@ function parseTradesInSheet(sheet, range, startRow) {
         continue;
       }
 
-      // № сделки — обязательно для дедупликации
+      // № сделки
       const tradeNumber = rowCells[cols.tradeNumber] != null
         ? String(rowCells[cols.tradeNumber]).trim()
         : '';
