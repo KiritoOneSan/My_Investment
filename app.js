@@ -536,8 +536,10 @@ function parseTradesInSheet(sheet, range, startRow) {
         ? String(rowCells[cols.counterparty]).trim() : null;
       const place = cols.place >= 0 && rowCells[cols.place]
         ? String(rowCells[cols.place]).trim() : null;
-
-      const trade = {
+	  // Если рынок не был определён — сделки ЦБ идут на основном рынке
+      const effectiveMarket = market || 'Основной рынок';
+      
+	  const trade = {
         trade_number: tradeNumber,
         name, isin,
         trade_date: isoDate,
@@ -552,13 +554,12 @@ function parseTradesInSheet(sheet, range, startRow) {
         commission_exec_kopecks: commissionExecKopecks,
         counterparty,
         place,
-        market,
+        market: effectiveMarket,
         row: r + 1
       };
       trades.push(trade);
 
-      const mKey = market || 'Без рынка';
-      marketBreakdown[mKey] = (marketBreakdown[mKey] || 0) + 1;
+      marketBreakdown[effectiveMarket] = (marketBreakdown[effectiveMarket] || 0) + 1;
       const tKey = tradeType || '—';
       typeBreakdown[tKey] = (typeBreakdown[tKey] || 0) + 1;
     }
@@ -795,6 +796,7 @@ function parseFuturesTrades(workbook) {
       commission_calc_kopecks: commCalc,
       commission_exec_kopecks: commExec,
       counterparty, place, comment,
+	  market: 'Срочный рынок',
       row: r + 1
     };
     trade.external_hash = [contractCode, isoDate, tradeType, qty, price].join('|');
