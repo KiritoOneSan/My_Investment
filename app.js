@@ -12,7 +12,7 @@ const screens = {
 };
 
 let currentScreen = 'summary';
-const history = [];
+const navHistory = [];
 
 function navigate(screenKey, addToHistory = true) {
   const screen = screens[screenKey];
@@ -23,10 +23,10 @@ function navigate(screenKey, addToHistory = true) {
   const backBtn = document.getElementById('backBtn');
   if (screen.isRoot) {
     backBtn.classList.add('hidden');
-    history.length = 0;
+    navHistory.length = 0;
   } else {
     backBtn.classList.remove('hidden');
-    if (addToHistory) history.push(currentScreen);
+    if (addToHistory) navHistory.push(currentScreen);
   }
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.nav === screenKey);
@@ -36,7 +36,7 @@ function navigate(screenKey, addToHistory = true) {
 }
 
 function goBack() {
-  const prev = history.pop();
+  const prev = navHistory.pop();
   if (prev) navigate(prev, false);
   else navigate('more', false);
 }
@@ -1178,6 +1178,156 @@ function parseFuturesPositions(workbook) {
   return { positions, go_total, free_cash, errors };
 }
 
+// ===== Парсер: сделки с иностранной валютой =====
+
+function findCurrencyTradesHeaderRow(sheet, r, range) {
+  let cols = {
+    instrument: -1, date: -1, type: -1, qty: -1, price: -1,
+    currency: -1, amount: -1, commCalc: -1, commExec: -1,
+    execDate: -1, tradeNumber: -1, counterparty: -1, place: -1, comment: -1
+  };
+  let foundCount = 0;
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+    const v = cell ? String(cell.v || '').trim() : '';
+    if (!v) continue;
+    if (/^Финансовый\s+инструмент$/i.test(v)) { cols.instrument = c; foundCount++; }
+    else if (/^Дата\s+и\s+время\s+заключения/i.test(v)) { cols.date = c; foundCount++; }
+    else if (/^Вид\s+сделки/i.test(v)) { cols.type = c; foundCount++; }
+    else if (/^Количество/i.test(v) && cols.qty < 0) { cols.qty = c; foundCount++; }
+    else if (/^Цена$/i.test(v)) { cols.price = c; foundCount++; }
+    else if (/^Валюта\s+расч[её]тов$/i.test(v)) { cols.currency = c; foundCount++; }
+    else if (/^Сумма\s+сделки/i.test(v)) { cols.amount = c; foundCount++; }
+    else if (/^Комиссия\s+Банка\s+за\s+расч[её]т/i.test(v) && cols.commCalc < 0) { cols.commCalc = c; foundCount++; }
+    else if (/^Комиссия\s+Банка\s+за\s+заключ/i.test(v) && cols.commExec < 0) { cols.commExec = c; foundCount++; }
+    else if (/^Дата\s+исполнения/i.test(v)) { cols.execDate = c; foundCount++; }
+    else if (/^№\s+сделки$/i.test(v) && cols.tradeNumber < 0) { cols.tradeNumber = c; foundCount++; }
+    else if (/^Контрагент/i.test(v) && cols.counterparty < 0) { cols.counterparty = c; foundCount++; }
+    else if (/^Место\s+заключения/i.test(v)) { cols.place = c; foundCount++; }
+    else if (/^Комментарий/i.test(v) && cols.comment < 0) { cols.comment = c; foundCount++; }
+  }
+  if (cols.instrument >= 0 && cols.date >= 0 && cols.type >= 0 && cols.tradeNumber >= 0) {
+    return cols;
+  }
+  return null;
+}
+
+function parseCurrencyTrades(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
+
+  let headerRow = -1;
+  let cols = null;
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const idx = findCurrencyTradesHeaderRow(sheet, r, range);
+    if (idx) { headerRow = r; cols = idx; break; }
+  }
+
+  if (headerRow < 0) {
+    return { trades: [], errors: [], typeStats: {}, totalVolume: 0 };
+  }
+
+  const trades = [];
+  const errors = [];
+  const typeStats = {};
+  let totalVolume = 0;
+  let emptyRun = 0;
+
+  for (let r = headerRow + 1; r <= range.e.r; r++) {
+    const rowCells = {};
+    const nonEmpty = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      rowCells[c] = cell ? cell.v : null;
+      if (cell && cell.v != null && String(cell.v).trim() !== '') {
+        nonEmpty.push({ c, v: String(cell.v).trim() });
+      }
+    }
+    const rowText = nonEmpty.map(x => x.v).join(' ').replace(/\s+/g, ' ');
+
+    // Стоп на следующей таблице
+    if (/Наименование\s+ценной\s+бумаги/i.test(rowText) ||
+        /Входящий\s+остаток/i.test(rowText) ||
+        /Отч[её]т\s+об\s+остатках/i.test(rowText) ||
+        /Движение\s+ценных\s+бумаг/i.test(rowText) ||
+        /Заключенные\s+в\s+отчетном\s+периоде\s+сделки\s+с\s+ценными/i.test(rowText) ||
+        /Завершенные\s+в\s+отчетном/i.test(rowText) ||
+        /Сделки\s+с\s+Производными/i.test(rowText)) {
+      break;
+    }
+
+    if (nonEmpty.length === 0) {
+      emptyRun++;
+      if (emptyRun >= 3) break;
+      continue;
+    }
+    emptyRun = 0;
+
+    const instrument = rowCells[cols.instrument] != null
+      ? String(rowCells[cols.instrument]).trim()
+      : '';
+    if (!instrument) continue;
+
+    // Пропускаем строку-заголовок, если попала
+    if (/^Финансовый\s+инструмент/i.test(instrument)) continue;
+
+    const isoDate = toIsoDate(rowCells[cols.date]);
+    if (!isoDate) {
+      errors.push(`Строка ${r + 1}: не распознана дата сделки «${String(rowCells[cols.date])}»`);
+      continue;
+    }
+
+    const tradeNumber = rowCells[cols.tradeNumber] != null
+      ? String(rowCells[cols.tradeNumber]).trim()
+      : '';
+    if (!tradeNumber) {
+      errors.push(`Строка ${r + 1}: отсутствует № сделки`);
+      continue;
+    }
+
+    const tradeType = rowCells[cols.type] != null ? String(rowCells[cols.type]).trim() : '';
+    const qty = toNumber(rowCells[cols.qty]);
+    const price = toNumber(rowCells[cols.price]);
+    const currency = cols.currency >= 0 && rowCells[cols.currency]
+      ? String(rowCells[cols.currency]).trim().toUpperCase() : null;
+    const amountKopecks = cols.amount >= 0 ? toKopecks(rowCells[cols.amount]) : null;
+    const commCalc = cols.commCalc >= 0 ? toKopecks(rowCells[cols.commCalc]) : null;
+    const commExec = cols.commExec >= 0 ? toKopecks(rowCells[cols.commExec]) : null;
+    const execDate = cols.execDate >= 0 ? toIsoDate(rowCells[cols.execDate]) : null;
+    const counterparty = cols.counterparty >= 0 && rowCells[cols.counterparty]
+      ? String(rowCells[cols.counterparty]).trim() : null;
+    const place = cols.place >= 0 && rowCells[cols.place]
+      ? String(rowCells[cols.place]).trim() : null;
+    const comment = cols.comment >= 0 && rowCells[cols.comment]
+      ? String(rowCells[cols.comment]).trim() : '';
+
+    const trade = {
+      trade_number: tradeNumber,
+      instrument,
+      trade_date: isoDate,
+      trade_type: tradeType,
+      quantity: qty,
+      price: price,
+      currency: currency,
+      amount_kopecks: amountKopecks,
+      commission_calc_kopecks: commCalc,
+      commission_exec_kopecks: commExec,
+      execution_date: execDate,
+      counterparty, place, comment,
+      market: 'Валютный рынок',
+      row: r + 1
+    };
+    trades.push(trade);
+
+    if (amountKopecks != null) totalVolume += Math.abs(amountKopecks);
+
+    const tKey = tradeType || '—';
+    typeStats[tKey] = (typeStats[tKey] || 0) + 1;
+  }
+
+  return { trades, errors, typeStats, totalVolume };
+}
+
 // ===== Импорт =====
 
 function detectReportType(workbook) {
@@ -1556,7 +1706,48 @@ function buildFuturesPositionsPreviewHtml(fp) {
   return wrapCollapsible('Открытые позиции по производным', `${fp.positions.length}`, content);
 }
 
-function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures, parsedMeta, parsedSummary, parsedBalances, parsedFuturesPositions) {
+// ===== Preview: Сделки с иностранной валютой =====
+
+function buildCurrencyTradesPreviewHtml(ct) {
+  if (!ct || ct.trades.length === 0) return '';
+
+  const typeRows = Object.entries(ct.typeStats)
+    .sort((a, b) => b[1] - a[1])
+    .map(([t, c]) => `<div class="import-row sub"><span>${t}</span><span>${c}</span></div>`)
+    .join('');
+
+  const sampleRows = ct.trades.slice(0, 5).map(t => `
+    <div class="op-row">
+      <div class="op-header">
+        <span class="op-date">${t.trade_date}</span>
+        <span class="op-market">${t.market}</span>
+      </div>
+      <div class="op-body">
+        <div class="op-left">
+          <div class="op-type">${t.trade_type} · ${t.instrument}</div>
+          <div class="op-comment">
+            ${formatNum(t.quantity, 2)} × ${formatNum(t.price, 4)}
+            · № ${t.trade_number}
+            ${t.counterparty ? ' · ' + t.counterparty : ''}
+          </div>
+        </div>
+        <div class="op-amount">${formatRub(t.amount_kopecks)}</div>
+      </div>
+    </div>
+  `).join('');
+
+  const content = `
+    <div class="import-row"><span>Общий оборот</span><span>${formatRub(Math.round(ct.totalVolume))}</span></div>
+    <div class="import-section-title">По видам сделок</div>
+    ${typeRows}
+    <div class="import-section-title">Первые 5 сделок</div>
+    <div class="op-list">${sampleRows}</div>
+  `;
+
+  return wrapCollapsible('Сделки с иностранной валютой', `${ct.trades.length}`, content);
+}
+
+function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures, parsedMeta, parsedSummary, parsedBalances, parsedFuturesPositions, parsedCurrencyTrades) {
   const typeLabel = {
     tax: 'Налоговый отчёт',
     brokerage: 'Отчёт о сделках и счетах',
@@ -1579,7 +1770,8 @@ function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrade
   const summaryHtml = parsedSummary ? buildAccountSummaryPreviewHtml(parsedSummary) : '';
   const balancesHtml = parsedBalances ? buildCashBalancesPreviewHtml(parsedBalances) : '';
   const futuresPositionsHtml = parsedFuturesPositions ? buildFuturesPositionsPreviewHtml(parsedFuturesPositions) : '';
-  
+  const currencyTradesHtml = parsedCurrencyTrades ? buildCurrencyTradesPreviewHtml(parsedCurrencyTrades) : '';
+	
   // Блок 2: Движение ЦБ
   const movementsHtml = parsedMv ? buildMovementsPreviewHtml(parsedMv) : '';
 
@@ -1639,6 +1831,7 @@ function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrade
     ${tradesHtml}
     ${futuresHtml}
     ${futuresPositionsHtml}
+    ${currencyTradesHtml}
     ${cashHtml}
     ${errorsHtml}
 
@@ -1672,6 +1865,7 @@ async function handleFile(file) {
       const parsedTrades = parseTrades(workbook);
       const parsedFutures = parseFuturesTrades(workbook);
       const parsedFuturesPositions = parseFuturesPositions(workbook);
+      const parsedCurrencyTrades = parseCurrencyTrades(workbook);
       const parsedCash = parseCashOperations(workbook);
 
       console.log('[parser] Метаданные:', parsedMeta);
@@ -1682,12 +1876,14 @@ async function handleFile(file) {
       console.log('[parser] Сделки:', parsedTrades.trades.length, '(дубл.:', parsedTrades.duplicates, ')');
       console.log('[parser] Фьючерсы (сделки):', parsedFutures.trades.length);
       console.log('[parser] Фьючерсы (позиции):', parsedFuturesPositions.positions.length);
+	  console.log('[parser] Валютные сделки:', parsedCurrencyTrades.trades.length);
       console.log('[parser] Операции:', parsedCash.operations.length);
 
       setPreview(buildCashPreview(
         file.name, workbook,
         parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures,
-        parsedMeta, parsedSummary, parsedBalances, parsedFuturesPositions
+        parsedMeta, parsedSummary, parsedBalances, parsedFuturesPositions,
+        parsedCurrencyTrades
       ));
       return;
     }
