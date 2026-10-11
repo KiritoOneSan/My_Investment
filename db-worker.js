@@ -285,6 +285,55 @@ async function initDb() {
   ensureColumn('futures_trades', 'account_id', 'INTEGER');
   ensureColumn('futures_trades', 'market', 'TEXT');
 
+  // ===== Специальные миграции =====
+
+  // Миграция trades: убираем security_id NOT NULL, если он есть
+  try {
+    const tradesCols = db.selectObjects("PRAGMA table_info(trades)");
+    const securityIdCol = tradesCols.find(c => c.name === 'security_id');
+    if (securityIdCol && securityIdCol.notnull === 1) {
+      console.log('[migration] Пересоздаём trades без security_id NOT NULL');
+      db.exec(`
+        CREATE TABLE trades_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          trade_number TEXT UNIQUE,
+          account_id INTEGER NOT NULL,
+          security_id INTEGER,
+          security_isin TEXT,
+          security_name TEXT,
+          trade_date TEXT NOT NULL,
+          trade_type TEXT NOT NULL,
+          quantity REAL NOT NULL,
+          price REAL NOT NULL,
+          amount_kopecks INTEGER NOT NULL,
+          nkd_kopecks INTEGER,
+          commission_calc_kopecks INTEGER,
+          commission_exec_kopecks INTEGER,
+          counterparty TEXT,
+          place TEXT,
+          market TEXT
+        );
+
+        INSERT INTO trades_new
+          (id, trade_number, account_id, security_id, security_isin, security_name,
+           trade_date, trade_type, quantity, price, amount_kopecks, nkd_kopecks,
+           commission_calc_kopecks, commission_exec_kopecks, counterparty, place, market)
+        SELECT
+          id, trade_number, account_id, security_id, security_isin, security_name,
+          trade_date, trade_type, quantity, price, amount_kopecks, nkd_kopecks,
+          commission_calc_kopecks, commission_exec_kopecks, counterparty, place, market
+        FROM trades;
+
+        DROP TABLE trades;
+        ALTER TABLE trades_new RENAME TO trades;
+      `);
+      console.log('[migration] trades пересоздана');
+    }
+  } catch (e) {
+    console.error('[migration] Ошибка миграции trades:', e);
+    throw e;
+  }
+  
   // ===== Счёт по умолчанию =====
   const count = db.selectValue('SELECT COUNT(*) FROM accounts');
   if (count === 0) {
