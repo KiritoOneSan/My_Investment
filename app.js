@@ -1932,7 +1932,7 @@ async function saveTrades(trades, accountId) {
         t.commission_calc_kopecks, t.commission_exec_kopecks,
         t.counterparty, t.place, t.market
       ]
-    ]);
+    });
     saved++;
   }
 
