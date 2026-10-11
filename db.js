@@ -47,6 +47,18 @@ class DbClient {
   run(sql, params = []) {
     return this._send('run', { sql, params });
   }
+
+  // Массовая вставка в одной транзакции
+  // ops = [{ sql, params }]
+  batch(ops) {
+    return this._send('batch', { operations: ops });
+  }
+
+  // Транзакция с разными типами запросов
+  // queries = [{ type: 'run'|'exec', sql, params }]
+  transaction(queries) {
+    return this._send('transaction', { queries });
+  }
 }
 
 window.db = new DbClient();

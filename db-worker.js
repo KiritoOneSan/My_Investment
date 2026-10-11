@@ -34,11 +34,15 @@ async function initDb() {
 
   db = new poolUtil.OpfsSAHPoolDb(DB_FILE);
 
+  // ===== Базовые таблицы =====
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS accounts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       code TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
+      display_name TEXT,
+      broker TEXT,
       currency TEXT NOT NULL DEFAULT 'RUB',
       is_active INTEGER NOT NULL DEFAULT 1
     );
@@ -53,29 +57,35 @@ async function initDb() {
       nominal REAL,
       coupon_rate REAL,
       maturity_date TEXT,
-      issuer TEXT
+      issuer TEXT,
+      last_seen_date TEXT
     );
 
     CREATE TABLE IF NOT EXISTS trades (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       trade_number TEXT UNIQUE,
       account_id INTEGER NOT NULL,
-      security_id INTEGER NOT NULL,
+      security_id INTEGER,
+      security_isin TEXT,
+      security_name TEXT,
       trade_date TEXT NOT NULL,
       trade_type TEXT NOT NULL,
       quantity REAL NOT NULL,
       price REAL NOT NULL,
       amount_kopecks INTEGER NOT NULL,
       nkd_kopecks INTEGER,
-      commission_kopecks INTEGER,
+      commission_calc_kopecks INTEGER,
+      commission_exec_kopecks INTEGER,
       counterparty TEXT,
+      place TEXT,
       market TEXT
     );
 
     CREATE TABLE IF NOT EXISTS lots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       account_id INTEGER NOT NULL,
-      security_id INTEGER NOT NULL,
+      security_id INTEGER,
+      security_isin TEXT,
       purchase_date TEXT NOT NULL,
       initial_quantity REAL NOT NULL,
       remaining_quantity REAL NOT NULL,
@@ -105,7 +115,8 @@ async function initDb() {
 
     CREATE TABLE IF NOT EXISTS payments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      security_id INTEGER NOT NULL,
+      security_id INTEGER,
+      security_isin TEXT,
       account_id INTEGER NOT NULL,
       payment_type TEXT NOT NULL,
       fixation_date TEXT,
@@ -136,7 +147,8 @@ async function initDb() {
       total_value_kopecks INTEGER NOT NULL,
       cash_rub_kopecks INTEGER NOT NULL DEFAULT 0,
       cash_cny_kopecks INTEGER NOT NULL DEFAULT 0,
-      cash_usd_kopecks INTEGER NOT NULL DEFAULT 0
+      cash_usd_kopecks INTEGER NOT NULL DEFAULT 0,
+      total_with_cash_kopecks INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS import_log (
@@ -146,6 +158,8 @@ async function initDb() {
       report_type TEXT,
       period_start TEXT,
       period_end TEXT,
+      account_id INTEGER,
+      subaccount_code TEXT,
       operations_count INTEGER DEFAULT 0,
       duplicates_count INTEGER DEFAULT 0,
       errors_count INTEGER DEFAULT 0,
@@ -160,8 +174,14 @@ async function initDb() {
       row_content TEXT
     );
 
-	    CREATE TABLE IF NOT EXISTS futures_trades (
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS futures_trades (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER,
       contract_code TEXT NOT NULL,
       trade_date TEXT NOT NULL,
       trade_type TEXT NOT NULL,
@@ -173,20 +193,99 @@ async function initDb() {
       counterparty TEXT,
       place TEXT,
       comment TEXT,
+      market TEXT,
       external_hash TEXT UNIQUE
     );
-	
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT
+
+    CREATE TABLE IF NOT EXISTS futures_positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL,
+      snapshot_date TEXT NOT NULL,
+      contract_code TEXT NOT NULL,
+      incoming_qty REAL,
+      added_qty REAL,
+      removed_qty REAL,
+      executed_qty REAL,
+      outgoing_qty REAL,
+      go REAL,
+      margin REAL,
+      expiration_date TEXT,
+      external_hash TEXT UNIQUE
+    );
+
+    CREATE TABLE IF NOT EXISTS currency_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER,
+      trade_number TEXT UNIQUE,
+      instrument TEXT NOT NULL,
+      trade_date TEXT NOT NULL,
+      trade_type TEXT NOT NULL,
+      quantity REAL,
+      price REAL,
+      currency TEXT,
+      amount_kopecks INTEGER,
+      commission_calc_kopecks INTEGER,
+      commission_exec_kopecks INTEGER,
+      execution_date TEXT,
+      counterparty TEXT,
+      place TEXT,
+      comment TEXT,
+      market TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS report_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      report_log_id INTEGER NOT NULL,
+      account_id INTEGER NOT NULL,
+      snapshot_date TEXT NOT NULL,
+      broker TEXT,
+      period_from TEXT,
+      period_to TEXT,
+      client_name TEXT,
+      inn TEXT,
+      contract TEXT,
+      subaccount_code TEXT,
+      account_number TEXT,
+      cny_start_rate REAL,
+      cny_end_rate REAL,
+      total_value_kopecks INTEGER,
+      cash_rub_kopecks INTEGER,
+      cash_cny_kopecks INTEGER,
+      cash_usd_kopecks INTEGER,
+      UNIQUE(report_log_id, account_id)
     );
   `);
 
-  // Миграции (для баз, созданных до 3.2.1)
+  // ===== Миграции для существующих баз =====
+
+  ensureColumn('accounts', 'display_name', 'TEXT');
+  ensureColumn('accounts', 'broker', 'TEXT');
+
+  ensureColumn('securities', 'last_seen_date', 'TEXT');
+
   ensureColumn('trades', 'market', 'TEXT');
+  ensureColumn('trades', 'security_isin', 'TEXT');
+  ensureColumn('trades', 'security_name', 'TEXT');
+  ensureColumn('trades', 'commission_calc_kopecks', 'INTEGER');
+  ensureColumn('trades', 'commission_exec_kopecks', 'INTEGER');
+  ensureColumn('trades', 'place', 'TEXT');
+
+  ensureColumn('lots', 'security_isin', 'TEXT');
+
   ensureColumn('cash_operations', 'market', 'TEXT');
   ensureColumn('cash_operations', 'external_hash', 'TEXT');
 
+  ensureColumn('payments', 'security_isin', 'TEXT');
+
+  ensureColumn('portfolio_snapshots', 'total_with_cash_kopecks', 'INTEGER');
+
+  ensureColumn('import_log', 'account_id', 'INTEGER');
+  ensureColumn('import_log', 'subaccount_code', 'TEXT');
+
+  ensureColumn('futures_trades', 'account_id', 'INTEGER');
+  ensureColumn('futures_trades', 'market', 'TEXT');
+
+  // ===== Счёт по умолчанию =====
   const count = db.selectValue('SELECT COUNT(*) FROM accounts');
   if (count === 0) {
     db.exec("INSERT INTO accounts (code, name, currency) VALUES ('MAIN', 'Основной счёт', 'RUB')");
@@ -222,6 +321,50 @@ self.onmessage = async (e) => {
       db.exec({ sql: payload.sql, bind: payload.params || [] });
       const lastId = db.selectValue('SELECT last_insert_rowid()');
       self.postMessage({ id, ok: true, result: { lastId } });
+      return;
+    }
+
+    if (type === 'batch') {
+      // Массовая вставка в одной транзакции
+      // payload.operations = [{ sql, params }]
+      const results = [];
+      db.exec('BEGIN');
+      try {
+        for (const op of payload.operations) {
+          db.exec({ sql: op.sql, bind: op.params || [] });
+          results.push({ ok: true });
+        }
+        db.exec('COMMIT');
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+      self.postMessage({ id, ok: true, result: { count: results.length } });
+      return;
+    }
+
+    if (type === 'transaction') {
+      // Пакет SQL-запросов в одной транзакции
+      // payload.queries = [{ type: 'run'|'exec', sql, params }]
+      const results = [];
+      db.exec('BEGIN');
+      try {
+        for (const q of payload.queries) {
+          if (q.type === 'exec') {
+            db.exec(q.sql);
+            results.push({ ok: true });
+          } else {
+            db.exec({ sql: q.sql, bind: q.params || [] });
+            const lastId = db.selectValue('SELECT last_insert_rowid()');
+            results.push({ lastId });
+          }
+        }
+        db.exec('COMMIT');
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+      self.postMessage({ id, ok: true, result: { results } });
       return;
     }
 
