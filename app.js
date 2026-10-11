@@ -60,6 +60,11 @@ async function initDatabase() {
     const accounts = await window.db.select('SELECT * FROM accounts');
     console.log('[db] Готово. Счетов:', accounts.length);
     setDbStatus('OK · счетов: ' + accounts.length);
+
+    // После успешной инициализации — обновляем список импортов
+    if (typeof refreshImportLog === 'function') {
+      refreshImportLog();
+    }
   } catch (err) {
     console.error('[db] Ошибка:', err);
     setDbStatus('Ошибка: ' + err.message, true);
@@ -2526,6 +2531,9 @@ async function refreshImportLog() {
   const el = document.getElementById('importLogList');
   if (!el) return;
 
+  // Если база ещё не готова — тихо выходим, повторим после инициализации
+  if (!window.db || !window.db.ready) return;
+
   try {
     const rows = await window.db.select(
       `SELECT id, file_name, import_date, status, operations_count, duplicates_count, errors_count
@@ -2730,9 +2738,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const wipeBtn = document.getElementById('wipeDbBtn');
   if (wipeBtn) wipeBtn.addEventListener('click', wipeAllData);
-
-  // Обновляем список импортов
-  refreshImportLog();
 });
 
 window.addEventListener('popstate', () => {
