@@ -6,12 +6,12 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'">
   <meta name="theme-color" content="#0d6e4f">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=25">
+  <link rel="stylesheet" href="style.css?v=26">
   <title>Инвестиции</title>
 </head>
 <body>
 
-  <!-- SVG-СПРАЙТ: невидимый набор иконок -->
+  <!-- SVG-СПРАЙТ -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <symbol id="i-summary" viewBox="0 0 24 24">
       <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
@@ -50,38 +50,25 @@
     </symbol>
   </svg>
 
-  <!-- ВЕРХНЯЯ ПАНЕЛЬ -->
   <header id="appBar">
     <button id="backBtn" class="hidden">←</button>
     <h1 id="appBarTitle">Сводка</h1>
   </header>
 
-  <!-- ОСНОВНОЙ КОНТЕНТ -->
   <main id="content">
 
-    <!-- ЭКРАН: Сводка -->
+    <!-- Сводка -->
     <section id="screen-summary" class="screen active">
       <div class="card big-value">
         <div class="label">Стоимость портфеля</div>
         <div class="value">1 030 450,17 ₽</div>
         <div class="change positive">+12 345,67 ₽ (+1,21%)</div>
       </div>
-
       <div class="currency-grid">
-        <div class="currency-cell">
-          <div class="currency-label">RUB</div>
-          <div class="currency-value">951 437,56</div>
-        </div>
-        <div class="currency-cell">
-          <div class="currency-label">CNY</div>
-          <div class="currency-value">515,82</div>
-        </div>
-        <div class="currency-cell">
-          <div class="currency-label">USD</div>
-          <div class="currency-value">202,79</div>
-        </div>
+        <div class="currency-cell"><div class="currency-label">RUB</div><div class="currency-value">951 437,56</div></div>
+        <div class="currency-cell"><div class="currency-label">CNY</div><div class="currency-value">515,82</div></div>
+        <div class="currency-cell"><div class="currency-label">USD</div><div class="currency-value">202,79</div></div>
       </div>
-
       <h2>Доходы за месяц</h2>
       <div class="tiles-grid">
         <div class="tile"><div class="tile-label">Купоны</div><div class="tile-value">11 223,48 ₽</div></div>
@@ -89,95 +76,65 @@
         <div class="tile"><div class="tile-label">P&L</div><div class="tile-value positive">+5 234 ₽</div></div>
         <div class="tile"><div class="tile-label">Издержки</div><div class="tile-value negative">−49,21 ₽</div></div>
       </div>
-
       <h2>Выплаты в этом месяце</h2>
       <div class="card">
-        <div class="payments-row">
-          <span>Фиксированные</span>
-          <span>24 шт · 12 345 ₽</span>
-        </div>
-        <div class="payments-row">
-          <span>Плавающие</span>
-          <span>5 шт · —</span>
-        </div>
+        <div class="payments-row"><span>Фиксированные</span><span>24 шт · 12 345 ₽</span></div>
+        <div class="payments-row"><span>Плавающие</span><span>5 шт · —</span></div>
       </div>
-
       <div class="notice">По 3 позициям нет данных о покупке</div>
     </section>
 
-    <!-- ЭКРАН: Портфели -->
+    <!-- Портфели -->
     <section id="screen-portfolios" class="screen">
       <div class="toggle-row">
         <button class="toggle active" data-mode="combined">Сводно</button>
         <button class="toggle" data-mode="by-account">По счетам</button>
       </div>
-
       <h2>Деньги</h2>
       <div class="list">
         <div class="list-item"><span>RUB</span><span>73 288,04 ₽</span></div>
         <div class="list-item"><span>CNY</span><span>515,82 CNY</span></div>
       </div>
-
       <h2>Акции</h2>
       <div class="list">
         <div class="list-item"><span>Сбербанк ао</span><span>12 198 ₽</span></div>
         <div class="list-item"><span>Газпром а.о.</span><span>14 708,40 ₽</span></div>
         <div class="list-item"><span>МТС-ао</span><span>12 585 ₽</span></div>
       </div>
-
       <h2>Облигации</h2>
       <div class="list">
         <div class="list-item"><span>Атомэнп05</span><span>55 886,78 ₽</span></div>
         <div class="list-item"><span>РЖД 1Р38R</span><span>40 164,32 ₽</span></div>
       </div>
-
       <h2>Еврооблигации</h2>
       <div class="list">
         <div class="list-item"><span>МЕТАЛИН1P2</span><span>43 054,28 ₽</span></div>
       </div>
-
       <h2>Паи</h2>
       <div class="list">
         <div class="list-item"><span>Рентал ПРО</span><span>60 474 ₽</span></div>
       </div>
     </section>
 
-    <!-- ЭКРАН: Ещё -->
+    <!-- Ещё -->
     <section id="screen-more" class="screen">
       <div class="menu">
-        <button class="menu-item" data-nav="graphs">
-          <svg class="menu-icon"><use href="#i-graphs"/></svg>
-          <span>Графики</span>
-        </button>
-        <button class="menu-item" data-nav="import">
-          <svg class="menu-icon"><use href="#i-import"/></svg>
-          <span>Импорт</span>
-        </button>
-        <button class="menu-item" data-nav="taxes">
-          <svg class="menu-icon"><use href="#i-taxes"/></svg>
-          <span>Налоги</span>
-        </button>
-        <button class="menu-item" data-nav="trades">
-          <svg class="menu-icon"><use href="#i-trades"/></svg>
-          <span>Сделки</span>
-        </button>
-        <button class="menu-item" data-nav="operations">
-          <svg class="menu-icon"><use href="#i-operations"/></svg>
-          <span>Операции</span>
-        </button>
-        <button class="menu-item" data-nav="settings">
-          <svg class="menu-icon"><use href="#i-settings"/></svg>
-          <span>Настройки</span>
-        </button>
+        <button class="menu-item" data-nav="graphs"><svg class="menu-icon"><use href="#i-graphs"/></svg><span>Графики</span></button>
+        <button class="menu-item" data-nav="import"><svg class="menu-icon"><use href="#i-import"/></svg><span>Импорт</span></button>
+        <button class="menu-item" data-nav="taxes"><svg class="menu-icon"><use href="#i-taxes"/></svg><span>Налоги</span></button>
+        <button class="menu-item" data-nav="trades"><svg class="menu-icon"><use href="#i-trades"/></svg><span>Сделки</span></button>
+        <button class="menu-item" data-nav="operations"><svg class="menu-icon"><use href="#i-operations"/></svg><span>Операции</span></button>
+        <button class="menu-item" data-nav="settings"><svg class="menu-icon"><use href="#i-settings"/></svg><span>Настройки</span></button>
       </div>
     </section>
 
-    <!-- ВНУТРЕННИЕ ЭКРАНЫ -->
+    <!-- Графики -->
     <section id="screen-graphs" class="screen">
       <h2>Графики</h2>
       <div class="card placeholder">Здесь будут графики</div>
     </section>
 
+    <!-- Импорт -->
     <section id="screen-import" class="screen">
       <h2>Импорт отчёта</h2>
       <input type="file" id="fileInput" accept=".xlsx,.xls" hidden>
@@ -187,21 +144,25 @@
       </div>
     </section>
 
+    <!-- Налоги -->
     <section id="screen-taxes" class="screen">
       <h2>Налоги</h2>
       <div class="card placeholder">Начислено / Уплачено / К уплате</div>
     </section>
 
+    <!-- Сделки -->
     <section id="screen-trades" class="screen">
       <h2>Сделки</h2>
       <div class="card placeholder">Журнал сделок</div>
     </section>
 
+    <!-- Операции -->
     <section id="screen-operations" class="screen">
       <h2>Операции</h2>
       <div class="card placeholder">Журнал денежных операций</div>
     </section>
 
+    <!-- Настройки -->
     <section id="screen-settings" class="screen">
       <h2>Настройки</h2>
       <div class="card">
@@ -218,11 +179,27 @@
           <span>1 день</span>
         </div>
       </div>
+
+      <h2>Управление базой</h2>
+      <div class="card">
+        <div class="settings-row">
+          <span>Экспорт базы (.db)</span>
+          <button class="small-btn" id="exportDbBtn">Скачать</button>
+        </div>
+        <div class="settings-row">
+          <span>Очистить все данные</span>
+          <button class="small-btn small-btn-danger" id="wipeDbBtn">Очистить</button>
+        </div>
+      </div>
+
+      <h2>Последние импорты</h2>
+      <div class="card" id="importLogList">
+        <div class="placeholder">Загрузка...</div>
+      </div>
     </section>
 
   </main>
 
-  <!-- НИЖНЯЯ НАВИГАЦИЯ -->
   <nav id="bottomNav">
     <button class="nav-btn active" data-nav="summary">
       <svg class="nav-icon"><use href="#i-summary"/></svg>
@@ -238,9 +215,8 @@
     </button>
   </nav>
 
-  <!-- Локальные библиотеки -->
   <script src="lib/xlsx.full.min.js"></script>
-  <script src="db.js?v=25"></script>
-  <script src="app.js?v=25"></script>
+  <script src="db.js?v=26"></script>
+  <script src="app.js?v=26"></script>
 </body>
 </html>

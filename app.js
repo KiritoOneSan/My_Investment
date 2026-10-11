@@ -32,6 +32,9 @@ function navigate(screenKey, addToHistory = true) {
     btn.classList.toggle('active', btn.dataset.nav === screenKey);
   });
   document.getElementById('content').scrollTop = 0;
+  if (screenKey === 'settings') {
+    refreshImportLog();
+  }
   currentScreen = screenKey;
 }
 
@@ -2371,6 +2374,231 @@ async function performImport(fileName, parsed) {
   }
 }
 
+// ============================================================
+// ===== Этап 3.4.4: UI импорта ==============================
+// ============================================================
+
+// Хранилище последнего распарсенного файла для импорта по кнопке
+let pendingImport = null;
+
+// Показать предпросмотр с кнопками импорта
+function setPreviewWithActions(html, parsed, fileName) {
+  pendingImport = { parsed, fileName };
+  const el = document.getElementById('importPreview');
+  if (!el) return;
+  el.innerHTML = html + `
+    <div class="import-actions">
+      <button class="primary-btn" id="doImportBtn">Импортировать в базу</button>
+      <button class="secondary-btn" id="exportBeforeBtn">Экспорт базы (.db)</button>
+    </div>
+    <div id="importResult"></div>
+  `;
+  el.style.borderLeft = '4px solid var(--primary)';
+
+  const doBtn = document.getElementById('doImportBtn');
+  const exportBtn = document.getElementById('exportBeforeBtn');
+
+  if (doBtn) doBtn.addEventListener('click', doImportPending);
+  if (exportBtn) exportBtn.addEventListener('click', exportDatabase);
+}
+
+// Выполнить импорт текущего файла
+async function doImportPending() {
+  if (!pendingImport) return;
+
+  const { parsed, fileName } = pendingImport;
+  const resultEl = document.getElementById('importResult');
+  const doBtn = document.getElementById('doImportBtn');
+
+  if (doBtn) {
+    doBtn.disabled = true;
+    doBtn.textContent = 'Импорт...';
+  }
+  if (resultEl) {
+    resultEl.innerHTML = '<div class="import-note">Идёт запись в базу...</div>';
+  }
+
+  try {
+    const stats = await performImport(fileName, parsed);
+
+    // Формируем отчёт
+    const totalSaved = Object.values(stats.saved).reduce((s, v) => s + v, 0);
+    const totalSkipped = Object.values(stats.skipped).reduce((s, v) => s + v, 0);
+
+    let html = '';
+    if (stats.status === 'success') {
+      html += `<div class="import-success">✓ Импорт завершён</div>`;
+      html += `<div class="import-row"><span>Сохранено записей</span><span><b>${totalSaved}</b></span></div>`;
+      if (totalSkipped > 0) {
+        html += `<div class="import-row"><span>Пропущено дубликатов</span><span>${totalSkipped}</span></div>`;
+      }
+      html += `<div class="import-row"><span>Сделки с ЦБ</span><span>${stats.saved.trades}</span></div>`;
+      if (stats.saved.futures_trades > 0)
+        html += `<div class="import-row"><span>Сделки производные</span><span>${stats.saved.futures_trades}</span></div>`;
+      if (stats.saved.currency_trades > 0)
+        html += `<div class="import-row"><span>Валютные сделки</span><span>${stats.saved.currency_trades}</span></div>`;
+      html += `<div class="import-row"><span>Денежные операции</span><span>${stats.saved.cash_operations}</span></div>`;
+      html += `<div class="import-row"><span>Справочник бумаг</span><span>${stats.saved.securities}</span></div>`;
+      if (stats.saved.futures_positions > 0)
+        html += `<div class="import-row"><span>Позиции производные</span><span>${stats.saved.futures_positions}</span></div>`;
+      html += `<div class="import-row"><span>Снимок портфеля</span><span>${stats.saved.snapshots}</span></div>`;
+    } else {
+      html += `<div class="import-error">✗ Импорт не выполнен</div>`;
+    }
+
+    if (stats.errors && stats.errors.length > 0) {
+      html += `<div class="import-errors">
+        <div class="import-headers-label">Ошибки (${stats.errors.length}):</div>
+        ${stats.errors.slice(0, 5).map(e => `<div class="import-error">${e}</div>`).join('')}
+        ${stats.errors.length > 5 ? `<div class="import-note">…и ещё ${stats.errors.length - 5}</div>` : ''}
+      </div>`;
+    }
+
+    if (resultEl) resultEl.innerHTML = html;
+
+    if (doBtn) {
+      doBtn.disabled = false;
+      doBtn.textContent = stats.status === 'success' ? 'Импортировать повторно' : 'Попробовать снова';
+    }
+
+    // Обновляем список импортов в настройках
+    refreshImportLog();
+  } catch (err) {
+    console.error('[import] Ошибка:', err);
+    if (resultEl) {
+      resultEl.innerHTML = `<div class="import-error">Ошибка импорта: ${err.message}</div>`;
+    }
+    if (doBtn) {
+      doBtn.disabled = false;
+      doBtn.textContent = 'Попробовать снова';
+    }
+  }
+}
+
+// ===== Экспорт базы =====
+
+async function exportDatabase() {
+  try {
+    // Читаем файл через SQLite VACUUM INTO (создаёт копию в виртуальной FS)
+    // Альтернатива: используем OPFS getFile. Но проще — сделать бэкап через SQLite.
+    // Используем sqlite3.serialize() — есть в WASM-версии.
+
+    // Способ: экспортируем через sqlite3.capi.sqlite3_js_db_export
+    // Но у нас не прямой доступ. Идём проще: выгружаем все данные в JSON как fallback.
+    // Пока — заглушка. Настоящий экспорт .db будет позже через WASM API.
+
+    // Простейший и надёжный экспорт: сохраняем БД через OPFS-файл.
+    // В нашем db-worker используем db.exec("VACUUM INTO '/backup.db'")
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `investments_backup_${stamp}.db`;
+
+    const result = await window.db.exec(
+      `VACUUM INTO '/backup-${stamp}.db'`
+    );
+
+    // Теперь читаем файл через OPFS
+    const root = await navigator.storage.getDirectory();
+    const poolDir = await root.getDirectoryHandle('investments-pool', { create: false });
+    const fileHandle = await poolDir.getFileHandle(`/backup-${stamp}.db`, { create: false });
+    const file = await fileHandle.getFile();
+
+    // Скачиваем
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    console.log('[export] Файл скачан:', filename);
+  } catch (err) {
+    console.error('[export] Ошибка:', err);
+    alert('Ошибка экспорта: ' + err.message);
+  }
+}
+
+// ===== Список последних импортов =====
+
+async function refreshImportLog() {
+  const el = document.getElementById('importLogList');
+  if (!el) return;
+
+  try {
+    const rows = await window.db.select(
+      `SELECT id, file_name, import_date, status, operations_count, duplicates_count, errors_count
+       FROM import_log
+       ORDER BY id DESC
+       LIMIT 10`
+    );
+
+    if (rows.length === 0) {
+      el.innerHTML = '<div class="placeholder">Импортов пока нет</div>';
+      return;
+    }
+
+    el.innerHTML = rows.map(r => {
+      const date = r.import_date ? r.import_date.slice(0, 19).replace('T', ' ') : '—';
+      const statusIcon = r.status === 'success' ? '✓' : (r.status === 'failed' ? '✗' : '…');
+      const statusClass = r.status === 'success' ? 'positive' : (r.status === 'failed' ? 'negative' : '');
+      return `
+        <div class="import-log-item">
+          <div class="import-log-name">${statusIcon} ${r.file_name}</div>
+          <div class="import-log-meta">
+            ${date} · сохранено ${r.operations_count || 0}
+            ${r.duplicates_count ? ` · пропущено ${r.duplicates_count}` : ''}
+            ${r.errors_count ? ` · ошибок ${r.errors_count}` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    console.error('[import_log] Ошибка:', err);
+    el.innerHTML = '<div class="import-error">Ошибка загрузки списка</div>';
+  }
+}
+
+// ===== Очистка базы =====
+
+async function wipeAllData() {
+  const ok = confirm(
+    'Удалить ВСЕ данные из базы? Это действие необратимо.\n\n' +
+    'Убедитесь, что сделали экспорт базы перед этим.'
+  );
+  if (!ok) return;
+
+  const ok2 = confirm('Точно удалить? Это последнее подтверждение.');
+  if (!ok2) return;
+
+  try {
+    await window.db.exec("DELETE FROM trades");
+    await window.db.exec("DELETE FROM futures_trades");
+    await window.db.exec("DELETE FROM currency_trades");
+    await window.db.exec("DELETE FROM cash_operations");
+    await window.db.exec("DELETE FROM futures_positions");
+    await window.db.exec("DELETE FROM portfolio_snapshots");
+    await window.db.exec("DELETE FROM report_snapshots");
+    await window.db.exec("DELETE FROM import_log");
+    await window.db.exec("DELETE FROM import_errors");
+    await window.db.exec("DELETE FROM securities");
+    await window.db.exec("DELETE FROM lots");
+    await window.db.exec("DELETE FROM lot_consumption");
+    await window.db.exec("DELETE FROM payments");
+    await window.db.exec("DELETE FROM taxes");
+    // accounts не удаляем — оставляем MAIN
+    await window.db.exec("DELETE FROM accounts WHERE code != 'MAIN'");
+
+    alert('Все данные удалены. Основной счёт MAIN сохранён.');
+    refreshImportLog();
+    initDatabase();
+  } catch (err) {
+    console.error('[wipe] Ошибка:', err);
+    alert('Ошибка очистки: ' + err.message);
+  }
+}
+
 async function handleFile(file) {
   if (!file) return;
   setPreview('<div class="placeholder">Чтение файла...</div>');
@@ -2412,12 +2640,25 @@ async function handleFile(file) {
 	  console.log('[parser] Валютные сделки:', parsedCurrencyTrades.trades.length);
       console.log('[parser] Операции:', parsedCash.operations.length);
 
-      setPreview(buildCashPreview(
+      const parsed = {
+        meta: parsedMeta,
+        summary: parsedSummary,
+        balances: parsedBalances,
+        securities: parsedSec,
+        movements: parsedMv,
+        trades: parsedTrades,
+        futures: parsedFutures,
+        futuresPositions: parsedFuturesPositions,
+        currencyTrades: parsedCurrencyTrades,
+        cash: parsedCash
+      };
+      const previewHtml = buildCashPreview(
         file.name, workbook,
         parsedCash, parsedSec, parsedTrades, parsedMv, parsedFutures,
         parsedMeta, parsedSummary, parsedBalances, parsedFuturesPositions,
         parsedCurrencyTrades
-      ));
+      );
+      setPreviewWithActions(previewHtml, parsed, file.name);
       return;
     }
     setPreview(`<div class="import-file-name">📄 ${file.name}</div><div class="import-error">Не удалось определить тип отчёта</div>`, true);
@@ -2482,6 +2723,16 @@ document.addEventListener('DOMContentLoaded', () => {
       e.target.value = '';
     });
   }
+  
+  // Кнопки управления базой
+  const exportBtn = document.getElementById('exportDbBtn');
+  if (exportBtn) exportBtn.addEventListener('click', exportDatabase);
+
+  const wipeBtn = document.getElementById('wipeDbBtn');
+  if (wipeBtn) wipeBtn.addEventListener('click', wipeAllData);
+
+  // Обновляем список импортов
+  refreshImportLog();
 });
 
 window.addEventListener('popstate', () => {
