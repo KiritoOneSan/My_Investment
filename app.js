@@ -2221,6 +2221,156 @@ async function finishImportLog(importLogId, stats) {
   );
 }
 
+// --- Главная функция импорта ---
+
+// Принимает распарсенные данные, имя файла, аккаунт
+// Возвращает статистику: { status, saved, skipped, errors, logId }
+async function performImport(fileName, parsed) {
+  const stats = {
+    logId: null,
+    accountId: null,
+    saved: {
+      trades: 0,
+      futures_trades: 0,
+      currency_trades: 0,
+      cash_operations: 0,
+      securities: 0,
+      futures_positions: 0,
+      snapshots: 0
+    },
+    skipped: {
+      trades: 0,
+      futures_trades: 0,
+      currency_trades: 0,
+      cash_operations: 0,
+      futures_positions: 0
+    },
+    errors: [],
+    status: 'in_progress'
+  };
+
+  try {
+    // 1. Определяем счёт по метаданным
+    const meta = parsed.meta || {};
+    const subaccountCode = meta.subaccount || 'MAIN';
+    const brokerName = meta.broker || null;
+
+    stats.accountId = await findOrCreateAccount(subaccountCode, brokerName);
+
+    // 2. Определяем дату снимка (дата окончания периода отчёта)
+    let snapshotDate = null;
+    if (meta.period_to) {
+      // Формат DD.MM.YYYY → YYYY-MM-DD
+      const m = meta.period_to.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+      if (m) snapshotDate = `${m[3]}-${m[2]}-${m[1]}`;
+    }
+    if (!snapshotDate) {
+      snapshotDate = new Date().toISOString().slice(0, 10);
+    }
+
+    // 3. Создаём запись в import_log
+    stats.logId = await createImportLog(
+      fileName, 'brokerage', meta, stats.accountId
+    );
+
+    // 4. Сохраняем справочник бумаг (без дубликатов)
+    if (parsed.securities && parsed.securities.positions.length > 0) {
+      const r = await saveSecurities(parsed.securities.positions, stats.accountId, snapshotDate);
+      stats.saved.securities = r.saved;
+    }
+
+    // 5. Сделки с ЦБ
+    if (parsed.trades && parsed.trades.trades.length > 0) {
+      const r = await saveTrades(parsed.trades.trades, stats.accountId);
+      stats.saved.trades = r.saved;
+      stats.skipped.trades = r.skipped;
+    }
+
+    // 6. Сделки с производными
+    if (parsed.futures && parsed.futures.trades.length > 0) {
+      const r = await saveFuturesTrades(parsed.futures.trades, stats.accountId);
+      stats.saved.futures_trades = r.saved;
+      stats.skipped.futures_trades = r.skipped;
+    }
+
+    // 7. Валютные сделки
+    if (parsed.currencyTrades && parsed.currencyTrades.trades.length > 0) {
+      const r = await saveCurrencyTrades(parsed.currencyTrades.trades, stats.accountId);
+      stats.saved.currency_trades = r.saved;
+      stats.skipped.currency_trades = r.skipped;
+    }
+
+    // 8. Денежные операции
+    if (parsed.cash && parsed.cash.operations.length > 0) {
+      const r = await saveCashOperations(parsed.cash.operations, stats.accountId);
+      stats.saved.cash_operations = r.saved;
+      stats.skipped.cash_operations = r.skipped;
+    }
+
+    // 9. Открытые позиции по производным
+    if (parsed.futuresPositions && parsed.futuresPositions.positions.length > 0) {
+      const r = await saveFuturesPositions(
+        parsed.futuresPositions.positions, stats.accountId, snapshotDate
+      );
+      stats.saved.futures_positions = r.saved;
+      stats.skipped.futures_positions = r.skipped;
+    }
+
+    // 10. Снимок портфеля
+    const snapR = await savePortfolioSnapshot(
+      stats.accountId, snapshotDate, parsed.securities, parsed.balances
+    );
+    stats.saved.snapshots = snapR.created || snapR.updated ? 1 : 0;
+
+    // 11. Снимок отчёта (метаданные + агрегаты)
+    await saveReportSnapshot(
+      stats.logId, stats.accountId, meta, parsed.securities, parsed.balances
+    );
+
+    // 12. Собираем все ошибки парсеров
+    if (parsed.cash && parsed.cash.errors) stats.errors.push(...parsed.cash.errors);
+    if (parsed.securities && parsed.securities.errors) stats.errors.push(...parsed.securities.errors);
+    if (parsed.trades && parsed.trades.errors) stats.errors.push(...parsed.trades.errors);
+    if (parsed.movements && parsed.movements.errors) stats.errors.push(...parsed.movements.errors);
+    if (parsed.futures && parsed.futures.errors) stats.errors.push(...parsed.futures.errors);
+    if (parsed.futuresPositions && parsed.futuresPositions.errors) stats.errors.push(...parsed.futuresPositions.errors);
+    if (parsed.currencyTrades && parsed.currencyTrades.errors) stats.errors.push(...parsed.currencyTrades.errors);
+
+    // 13. Обновляем import_log
+    const totalSaved = Object.values(stats.saved).reduce((s, v) => s + v, 0);
+    const totalSkipped = Object.values(stats.skipped).reduce((s, v) => s + v, 0);
+
+    await finishImportLog(stats.logId, {
+      operations_count: totalSaved,
+      duplicates_count: totalSkipped,
+      errors_count: stats.errors.length,
+      status: 'success'
+    });
+
+    stats.status = 'success';
+    return stats;
+
+  } catch (err) {
+    console.error('[import] Критическая ошибка:', err);
+    stats.errors.push('Критическая ошибка импорта: ' + err.message);
+    stats.status = 'failed';
+
+    if (stats.logId) {
+      try {
+        await finishImportLog(stats.logId, {
+          operations_count: 0,
+          duplicates_count: 0,
+          errors_count: stats.errors.length,
+          status: 'failed'
+        });
+      } catch (e) {
+        console.error('[import] Не удалось обновить лог:', e);
+      }
+    }
+    return stats;
+  }
+}
+
 async function handleFile(file) {
   if (!file) return;
   setPreview('<div class="placeholder">Чтение файла...</div>');
