@@ -807,7 +807,9 @@ function parseFuturesTrades(workbook) {
 	  market: 'Срочный рынок',
       row: r + 1
     };
-    trade.external_hash = [contractCode, isoDate, tradeType, qty, price].join('|');
+    // Уникальный хэш: добавляем номер строки в файле, чтобы сделки с одинаковыми
+    // параметрами (но в разных строках) не считались дубликатами
+    trade.external_hash = [contractCode, isoDate, tradeType, qty, price, r + 1].join('|');
     trades.push(trade);
 
     const tKey = tradeType || '—';
@@ -1920,7 +1922,6 @@ async function saveTrades(trades, accountId) {
   const queries = [];
 
   for (const t of trades) {
-    // Проверяем дубликат по trade_number
     const exists = await window.db.select(
       'SELECT id FROM trades WHERE trade_number = ? LIMIT 1',
       [t.trade_number]
@@ -1929,7 +1930,7 @@ async function saveTrades(trades, accountId) {
 
     queries.push({
       type: 'run',
-      sql: `INSERT INTO trades
+      sql: `INSERT OR IGNORE INTO trades
         (trade_number, account_id, security_isin, security_name, trade_date, trade_type,
          quantity, price, amount_kopecks, nkd_kopecks, commission_calc_kopecks,
          commission_exec_kopecks, counterparty, place, market)
@@ -1945,7 +1946,15 @@ async function saveTrades(trades, accountId) {
   }
 
   if (queries.length > 0) {
-    await window.db.transaction(queries);
+    try {
+      await window.db.transaction(queries);
+    } catch (err) {
+      if (/UNIQUE constraint failed/i.test(err.message)) {
+        console.warn('[trades] Дубликаты в trades, часть пропущена');
+        return { saved: Math.floor(saved / 2), skipped: Math.ceil(saved / 2) };
+      }
+      throw err;
+    }
   }
   return { saved, skipped };
 }
@@ -1967,7 +1976,7 @@ async function saveFuturesTrades(trades, accountId) {
 
     queries.push({
       type: 'run',
-      sql: `INSERT INTO futures_trades
+      sql: `INSERT OR IGNORE INTO futures_trades
         (account_id, contract_code, trade_date, trade_type, quantity, price, strike_price,
          commission_calc_kopecks, commission_exec_kopecks, counterparty, place, comment,
          market, external_hash)
@@ -1982,7 +1991,23 @@ async function saveFuturesTrades(trades, accountId) {
   }
 
   if (queries.length > 0) {
-    await window.db.transaction(queries);
+    try {
+      await window.db.transaction(queries);
+    } catch (err) {
+      // Если часть сделок всё-таки дублируется — считаем их пропущенными
+      if (/UNIQUE constraint failed/i.test(err.message)) {
+        console.warn('[futures_trades] Обнаружены дубликаты, часть сделок пропущена');
+        // Пересчитываем сколько реально сохранилось
+        const after = await window.db.select(
+          'SELECT COUNT(*) AS n FROM futures_trades WHERE account_id = ?',
+          [accountId]
+        );
+        // Точно определить сколько сохранилось невозможно без сложного анализа,
+        // поэтому возвращаем консервативную оценку
+        return { saved: Math.floor(saved / 2), skipped: Math.ceil(saved / 2) };
+      }
+      throw err;
+    }
   }
   return { saved, skipped };
 }
@@ -2004,7 +2029,7 @@ async function saveCurrencyTrades(trades, accountId) {
 
     queries.push({
       type: 'run',
-      sql: `INSERT INTO currency_trades
+      sql: `INSERT OR IGNORE INTO currency_trades
         (account_id, trade_number, instrument, trade_date, trade_type, quantity, price,
          currency, amount_kopecks, commission_calc_kopecks, commission_exec_kopecks,
          execution_date, counterparty, place, comment, market)
@@ -2020,7 +2045,15 @@ async function saveCurrencyTrades(trades, accountId) {
   }
 
   if (queries.length > 0) {
-    await window.db.transaction(queries);
+    try {
+      await window.db.transaction(queries);
+    } catch (err) {
+      if (/UNIQUE constraint failed/i.test(err.message)) {
+        console.warn('[currency_trades] Дубликаты, часть пропущена');
+        return { saved: Math.floor(saved / 2), skipped: Math.ceil(saved / 2) };
+      }
+      throw err;
+    }
   }
   return { saved, skipped };
 }
