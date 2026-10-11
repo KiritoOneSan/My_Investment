@@ -1838,6 +1838,389 @@ function buildCashPreview(fileName, workbook, parsedCash, parsedSec, parsedTrade
     <div class="import-note">Проверьте данные. Запись в базу будет на следующем шаге.</div>
   `;
 }
+
+// ============================================================
+// ===== Этап 3.4.2: Функции записи в базу ====================
+// ============================================================
+
+// --- Аккаунты (субсчета) ---
+
+// Находит аккаунт по коду субсчёта или создаёт новый.
+// Возвращает account_id.
+async function findOrCreateAccount(subaccountCode, brokerName) {
+  const code = (subaccountCode || 'MAIN').trim();
+  const existing = await window.db.select(
+    'SELECT id FROM accounts WHERE code = ? LIMIT 1',
+    [code]
+  );
+  if (existing.length > 0) return existing[0].id;
+
+  // Создаём новый
+  const name = code === 'MAIN' ? 'Основной счёт' : `Субсчёт ${code}`;
+  await window.db.run(
+    'INSERT INTO accounts (code, name, display_name, broker, currency, is_active) VALUES (?, ?, ?, ?, ?, 1)',
+    [code, name, name, brokerName || null, 'RUB']
+  );
+  const rows = await window.db.select('SELECT id FROM accounts WHERE code = ? LIMIT 1', [code]);
+  return rows[0].id;
+}
+
+// --- Ценные бумаги ---
+
+// Находит или создаёт бумагу по ISIN. Возвращает security_id.
+async function findOrCreateSecurity(pos) {
+  if (!pos.isin) return null;
+  const existing = await window.db.select(
+    'SELECT id FROM securities WHERE isin = ? LIMIT 1',
+    [pos.isin]
+  );
+  if (existing.length > 0) {
+    // Обновляем справочные данные, если они изменились
+    await window.db.run(
+      `UPDATE securities SET
+        name = COALESCE(?, name),
+        type = COALESCE(?, type),
+        currency = COALESCE(?, currency),
+        nominal = COALESCE(?, nominal),
+        coupon_rate = COALESCE(?, coupon_rate),
+        maturity_date = COALESCE(?, maturity_date),
+        last_seen_date = COALESCE(?, last_seen_date)
+       WHERE id = ?`,
+      [pos.name, pos.type, pos.currency, pos.nominal, pos.coupon_rate,
+       pos.payment_date, pos.snapshot_date, existing[0].id]
+    );
+    return existing[0].id;
+  }
+
+  await window.db.run(
+    `INSERT INTO securities
+      (isin, reg_number, name, type, currency, nominal, coupon_rate, maturity_date, last_seen_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [pos.isin, pos.reg_number || null, pos.name, pos.type, pos.currency,
+     pos.nominal, pos.coupon_rate, pos.payment_date, pos.snapshot_date]
+  );
+  const rows = await window.db.select('SELECT id FROM securities WHERE isin = ? LIMIT 1', [pos.isin]);
+  return rows[0].id;
+}
+
+// --- Сделки с ЦБ ---
+
+async function saveTrades(trades, accountId) {
+  if (!trades || trades.length === 0) return { saved: 0, skipped: 0 };
+
+  let saved = 0, skipped = 0;
+  const queries = [];
+
+  for (const t of trades) {
+    // Проверяем дубликат по trade_number
+    const exists = await window.db.select(
+      'SELECT id FROM trades WHERE trade_number = ? LIMIT 1',
+      [t.trade_number]
+    );
+    if (exists.length > 0) { skipped++; continue; }
+
+    queries.push({
+      type: 'run',
+      sql: `INSERT INTO trades
+        (trade_number, account_id, security_isin, security_name, trade_date, trade_type,
+         quantity, price, amount_kopecks, nkd_kopecks, commission_calc_kopecks,
+         commission_exec_kopecks, counterparty, place, market)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      params: [
+        t.trade_number, accountId, t.isin || null, t.name, t.trade_date, t.trade_type,
+        t.quantity, t.price, t.amount_kopecks, t.nkd_kopecks,
+        t.commission_calc_kopecks, t.commission_exec_kopecks,
+        t.counterparty, t.place, t.market
+      ]
+    ]);
+    saved++;
+  }
+
+  if (queries.length > 0) {
+    await window.db.transaction(queries);
+  }
+  return { saved, skipped };
+}
+
+// --- Сделки по производным ---
+
+async function saveFuturesTrades(trades, accountId) {
+  if (!trades || trades.length === 0) return { saved: 0, skipped: 0 };
+
+  let saved = 0, skipped = 0;
+  const queries = [];
+
+  for (const t of trades) {
+    const exists = await window.db.select(
+      'SELECT id FROM futures_trades WHERE external_hash = ? LIMIT 1',
+      [t.external_hash]
+    );
+    if (exists.length > 0) { skipped++; continue; }
+
+    queries.push({
+      type: 'run',
+      sql: `INSERT INTO futures_trades
+        (account_id, contract_code, trade_date, trade_type, quantity, price, strike_price,
+         commission_calc_kopecks, commission_exec_kopecks, counterparty, place, comment,
+         market, external_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      params: [
+        accountId, t.contract_code, t.trade_date, t.trade_type, t.quantity, t.price,
+        t.strike_price, t.commission_calc_kopecks, t.commission_exec_kopecks,
+        t.counterparty, t.place, t.comment, t.market, t.external_hash
+      ]
+    });
+    saved++;
+  }
+
+  if (queries.length > 0) {
+    await window.db.transaction(queries);
+  }
+  return { saved, skipped };
+}
+
+// --- Валютные сделки ---
+
+async function saveCurrencyTrades(trades, accountId) {
+  if (!trades || trades.length === 0) return { saved: 0, skipped: 0 };
+
+  let saved = 0, skipped = 0;
+  const queries = [];
+
+  for (const t of trades) {
+    const exists = await window.db.select(
+      'SELECT id FROM currency_trades WHERE trade_number = ? LIMIT 1',
+      [t.trade_number]
+    );
+    if (exists.length > 0) { skipped++; continue; }
+
+    queries.push({
+      type: 'run',
+      sql: `INSERT INTO currency_trades
+        (account_id, trade_number, instrument, trade_date, trade_type, quantity, price,
+         currency, amount_kopecks, commission_calc_kopecks, commission_exec_kopecks,
+         execution_date, counterparty, place, comment, market)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      params: [
+        accountId, t.trade_number, t.instrument, t.trade_date, t.trade_type,
+        t.quantity, t.price, t.currency, t.amount_kopecks,
+        t.commission_calc_kopecks, t.commission_exec_kopecks,
+        t.execution_date, t.counterparty, t.place, t.comment, t.market
+      ]
+    });
+    saved++;
+  }
+
+  if (queries.length > 0) {
+    await window.db.transaction(queries);
+  }
+  return { saved, skipped };
+}
+
+// --- Денежные операции ---
+
+async function saveCashOperations(operations, accountId) {
+  if (!operations || operations.length === 0) return { saved: 0, skipped: 0 };
+
+  let saved = 0, skipped = 0;
+  const queries = [];
+
+  for (const op of operations) {
+    const exists = await window.db.select(
+      'SELECT id FROM cash_operations WHERE external_hash = ? LIMIT 1',
+      [op.external_hash]
+    );
+    if (exists.length > 0) { skipped++; continue; }
+
+    queries.push({
+      type: 'run',
+      sql: `INSERT INTO cash_operations
+        (account_id, operation_date, operation_type, amount_kopecks, currency,
+         comment, market, external_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      params: [
+        accountId, op.date, op.operation_type, op.amount_kopecks, op.currency,
+        op.comment, op.market, op.external_hash
+      ]
+    });
+    saved++;
+  }
+
+  if (queries.length > 0) {
+    await window.db.transaction(queries);
+  }
+  return { saved, skipped };
+}
+
+// --- Остатки ЦБ (позиции) ---
+
+async function saveSecurities(positions, accountId, snapshotDate) {
+  if (!positions || positions.length === 0) return { saved: 0 };
+
+  let saved = 0;
+  for (const p of positions) {
+    p.snapshot_date = snapshotDate;
+    await findOrCreateSecurity(p);
+    saved++;
+  }
+  return { saved };
+}
+
+// --- Снимок портфеля ---
+
+async function savePortfolioSnapshot(accountId, snapshotDate, parsedSec, parsedBalances) {
+  // Итоговая стоимость бумаг
+  const totalValueKopecks = parsedSec ? parsedSec.totalValueKopecks : 0;
+
+  // Денежные остатки
+  let cashRub = 0, cashCny = 0, cashUsd = 0;
+  if (parsedBalances && parsedBalances.rows) {
+    for (const row of parsedBalances.rows) {
+      // totals = [входящий, исходящий, плановый]
+      // Берём исходящий (t[1])
+      const outgoing = row.totals && row.totals[1];
+      if (outgoing == null) continue;
+
+      const label = row.label.toUpperCase();
+      if (label === 'RUR' || label === 'RUB') cashRub += Math.round(outgoing * 100);
+      else if (label === 'CNY') cashCny += Math.round(outgoing * 100);
+      else if (label === 'USD') cashUsd += Math.round(outgoing * 100);
+    }
+  }
+
+  const totalWithCash = totalValueKopecks + cashRub + cashCny + cashUsd;
+
+  // Проверяем, есть ли уже снимок за эту дату и счёт
+  const existing = await window.db.select(
+    'SELECT id FROM portfolio_snapshots WHERE snapshot_date = ? AND account_id = ? LIMIT 1',
+    [snapshotDate, accountId]
+  );
+
+  if (existing.length > 0) {
+    await window.db.run(
+      `UPDATE portfolio_snapshots SET
+        total_value_kopecks = ?, cash_rub_kopecks = ?, cash_cny_kopecks = ?,
+        cash_usd_kopecks = ?, total_with_cash_kopecks = ?
+       WHERE id = ?`,
+      [totalValueKopecks, cashRub, cashCny, cashUsd, totalWithCash, existing[0].id]
+    );
+    return { updated: true };
+  }
+
+  await window.db.run(
+    `INSERT INTO portfolio_snapshots
+      (snapshot_date, account_id, total_value_kopecks, cash_rub_kopecks,
+       cash_cny_kopecks, cash_usd_kopecks, total_with_cash_kopecks)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [snapshotDate, accountId, totalValueKopecks, cashRub, cashCny, cashUsd, totalWithCash]
+  );
+  return { created: true };
+}
+
+// --- Позиции производных ---
+
+async function saveFuturesPositions(positions, accountId, snapshotDate) {
+  if (!positions || positions.length === 0) return { saved: 0, skipped: 0 };
+
+  let saved = 0, skipped = 0;
+  const queries = [];
+
+  for (const p of positions) {
+    const hash = [p.contract_code, snapshotDate, accountId].join('|');
+    const exists = await window.db.select(
+      'SELECT id FROM futures_positions WHERE external_hash = ? LIMIT 1',
+      [hash]
+    );
+    if (exists.length > 0) { skipped++; continue; }
+
+    queries.push({
+      type: 'run',
+      sql: `INSERT INTO futures_positions
+        (account_id, snapshot_date, contract_code, incoming_qty, added_qty, removed_qty,
+         executed_qty, outgoing_qty, go, margin, expiration_date, external_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      params: [
+        accountId, snapshotDate, p.contract_code,
+        p.incoming_qty, p.added_qty, p.removed_qty, p.executed_qty, p.outgoing_qty,
+        p.go, p.margin, p.expiration_date, hash
+      ]
+    });
+    saved++;
+  }
+
+  if (queries.length > 0) {
+    await window.db.transaction(queries);
+  }
+  return { saved, skipped };
+}
+
+// --- Снимок отчёта (метаданные + сводка) ---
+
+async function saveReportSnapshot(importLogId, accountId, meta, parsedSec, parsedBalances) {
+  const totalValueKopecks = parsedSec ? parsedSec.totalValueKopecks : null;
+
+  // Денежные остатки (исходящие)
+  let cashRub = null, cashCny = null, cashUsd = null;
+  if (parsedBalances && parsedBalances.rows) {
+    for (const row of parsedBalances.rows) {
+      const outgoing = row.totals && row.totals[1];
+      if (outgoing == null) continue;
+      const label = row.label.toUpperCase();
+      if (label === 'RUR' || label === 'RUB') cashRub = Math.round(outgoing * 100);
+      else if (label === 'CNY') cashCny = Math.round(outgoing * 100);
+      else if (label === 'USD') cashUsd = Math.round(outgoing * 100);
+    }
+  }
+
+  await window.db.run(
+    `INSERT OR REPLACE INTO report_snapshots
+      (report_log_id, account_id, snapshot_date, broker, period_from, period_to,
+       client_name, inn, contract, subaccount_code, account_number,
+       cny_start_rate, cny_end_rate, total_value_kopecks,
+       cash_rub_kopecks, cash_cny_kopecks, cash_usd_kopecks)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      importLogId, accountId, new Date().toISOString().slice(0, 10),
+      meta.broker, meta.period_from, meta.period_to,
+      meta.client, meta.inn, meta.contract, meta.subaccount, meta.account_number,
+      meta.cny_start_rate, meta.cny_end_rate, totalValueKopecks,
+      cashRub, cashCny, cashUsd
+    ]
+  );
+}
+
+// --- Лог импорта ---
+
+async function createImportLog(fileName, reportType, meta, accountId) {
+  await window.db.run(
+    `INSERT INTO import_log
+      (file_name, import_date, report_type, period_start, period_end, account_id, subaccount_code, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      fileName,
+      new Date().toISOString(),
+      reportType,
+      meta && meta.period_from ? meta.period_from : null,
+      meta && meta.period_to ? meta.period_to : null,
+      accountId,
+      meta && meta.subaccount ? meta.subaccount : null,
+      'in_progress'
+    ]
+  );
+  const rows = await window.db.select('SELECT last_insert_rowid() AS id');
+  return rows[0].id;
+}
+
+async function finishImportLog(importLogId, stats) {
+  await window.db.run(
+    `UPDATE import_log SET
+      operations_count = ?, duplicates_count = ?, errors_count = ?, status = ?
+     WHERE id = ?`,
+    [stats.operations_count || 0, stats.duplicates_count || 0,
+     stats.errors_count || 0, stats.status || 'success', importLogId]
+  );
+}
+
 async function handleFile(file) {
   if (!file) return;
   setPreview('<div class="placeholder">Чтение файла...</div>');
