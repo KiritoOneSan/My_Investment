@@ -35,6 +35,14 @@ function navigate(screenKey, addToHistory = true) {
   if (screenKey === 'settings') {
     refreshImportLog();
   }
+  if (screenKey === 'operations') {
+    if (!opState.loaded) {
+      initOperationsScreen();
+    } else {
+      // Данные могли обновиться после импорта — перечитываем
+      initOperationsScreen();
+    }
+  }
   currentScreen = screenKey;
 }
 
@@ -2640,6 +2648,187 @@ async function wipeAllData() {
   }
 }
 
+// ============================================================
+// ===== Этап 4.1: Экран «Операции» ==========================
+// ============================================================
+
+const opState = {
+  loaded: false,
+  filters: {
+    from: '',
+    to: '',
+    type: '',
+    market: '',
+    currency: '',
+    account: '',
+    search: '',
+    order: 'desc'
+  },
+  allRows: [],       // все операции из базы, загруженные один раз
+  filteredRows: [],  // результат фильтрации
+  renderedCount: 0
+};
+
+// Инициализация экрана — заполняет выпадающие списки
+async function initOperationsScreen() {
+  if (!window.db || !window.db.ready) return;
+
+  try {
+    // Загружаем все операции
+    const rows = await window.db.select(
+      `SELECT co.id, co.operation_date, co.operation_type, co.amount_kopecks,
+              co.currency, co.comment, co.market, co.account_id,
+              a.code AS account_code, a.display_name AS account_name
+       FROM cash_operations co
+       LEFT JOIN accounts a ON a.id = co.account_id
+       ORDER BY co.operation_date DESC, co.id DESC`
+    );
+    opState.allRows = rows;
+
+    // Заполняем типы
+    const types = [...new Set(rows.map(r => r.operation_type).filter(Boolean))].sort();
+    const typeSelect = document.getElementById('opFilterType');
+    if (typeSelect) {
+      typeSelect.innerHTML = '<option value="">Все</option>' +
+        types.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+    }
+
+    // Рынки
+    const markets = [...new Set(rows.map(r => r.market).filter(Boolean))].sort();
+    const marketSelect = document.getElementById('opFilterMarket');
+    if (marketSelect) {
+      marketSelect.innerHTML = '<option value="">Все</option>' +
+        markets.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+    }
+
+    // Валюты
+    const currencies = [...new Set(rows.map(r => r.currency).filter(Boolean))].sort();
+    const currSelect = document.getElementById('opFilterCurrency');
+    if (currSelect) {
+      currSelect.innerHTML = '<option value="">Все</option>' +
+        currencies.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+    }
+
+    // Счета
+    const accounts = await window.db.select('SELECT id, code, display_name, name FROM accounts ORDER BY id');
+    const accSelect = document.getElementById('opFilterAccount');
+    if (accSelect) {
+      accSelect.innerHTML = '<option value="">Все</option>' +
+        accounts.map(a => {
+          const label = a.display_name || a.name || a.code;
+          return `<option value="${a.id}">${escapeHtml(label)}</option>`;
+        }).join('');
+    }
+
+    opState.loaded = true;
+    applyOperationsFilters();
+  } catch (err) {
+    console.error('[operations] Ошибка инициализации:', err);
+    const el = document.getElementById('opList');
+    if (el) el.innerHTML = `<div class="import-error">Ошибка: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// Применяет фильтры и перерисовывает
+function applyOperationsFilters() {
+  const f = opState.filters;
+  let rows = opState.allRows.slice();
+
+  if (f.from) rows = rows.filter(r => r.operation_date >= f.from);
+  if (f.to) rows = rows.filter(r => r.operation_date <= f.to);
+  if (f.type) rows = rows.filter(r => r.operation_type === f.type);
+  if (f.market) rows = rows.filter(r => r.market === f.market);
+  if (f.currency) rows = rows.filter(r => r.currency === f.currency);
+  if (f.account) rows = rows.filter(r => String(r.account_id) === f.account);
+  if (f.search) {
+    const q = f.search.toLowerCase();
+    rows = rows.filter(r => (r.comment || '').toLowerCase().includes(q) || (r.operation_type || '').toLowerCase().includes(q));
+  }
+
+  // Сортировка
+  rows.sort((a, b) => {
+    const cmp = a.operation_date.localeCompare(b.operation_date);
+    if (cmp !== 0) return f.order === 'asc' ? cmp : -cmp;
+    return f.order === 'asc' ? a.id - b.id : b.id - a.id;
+  });
+
+  opState.filteredRows = rows;
+  opState.renderedCount = 0;
+
+  // Статистика
+  let income = 0, expense = 0;
+  for (const r of rows) {
+    if (r.amount_kopecks > 0) income += r.amount_kopecks;
+    else if (r.amount_kopecks < 0) expense += r.amount_kopecks;
+  }
+  document.getElementById('opCount').textContent = rows.length;
+  document.getElementById('opIncome').textContent = formatRub(income);
+  document.getElementById('opExpense').textContent = formatRub(expense);
+  document.getElementById('opNet').textContent = formatRub(income + expense);
+
+  // Список
+  renderOperationsChunk();
+}
+
+// Рендерит следующую порцию записей
+function renderOperationsChunk() {
+  const listEl = document.getElementById('opList');
+  if (!listEl) return;
+
+  const chunk = opState.filteredRows.slice(opState.renderedCount, opState.renderedCount + 100);
+
+  if (opState.renderedCount === 0) {
+    if (opState.filteredRows.length === 0) {
+      listEl.innerHTML = '<div class="placeholder">Операций по фильтру не найдено</div>';
+      document.getElementById('opLoadMore').style.display = 'none';
+      return;
+    }
+    listEl.innerHTML = '';
+  }
+
+  const html = chunk.map(op => {
+    const sign = op.amount_kopecks >= 0 ? 'positive' : 'negative';
+    const comment = op.comment ? escapeHtml(op.comment) : '';
+    const marketLabel = op.market ? `<span class="op-market">${escapeHtml(op.market)}</span>` : '';
+    const accountLabel = op.account_name || op.account_code || '';
+    return `
+      <div class="op-row">
+        <div class="op-header">
+          <span class="op-date">${op.operation_date}</span>
+          ${marketLabel}
+          ${accountLabel ? `<span class="op-account">${escapeHtml(accountLabel)}</span>` : ''}
+        </div>
+        <div class="op-body">
+          <div class="op-left">
+            <div class="op-type">${escapeHtml(op.operation_type || '—')}</div>
+            ${comment ? `<div class="op-comment">${comment}</div>` : ''}
+          </div>
+          <div class="op-amount ${sign}">${formatRub(op.amount_kopecks)} ${op.currency || ''}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  listEl.insertAdjacentHTML('beforeend', html);
+  opState.renderedCount += chunk.length;
+
+  const moreBtn = document.getElementById('opLoadMore');
+  if (moreBtn) {
+    moreBtn.style.display = opState.renderedCount < opState.filteredRows.length ? 'block' : 'none';
+    moreBtn.textContent = `Показать ещё ${Math.min(100, opState.filteredRows.length - opState.renderedCount)}`;
+  }
+}
+
+// Экранирование HTML
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function handleFile(file) {
   if (!file) return;
   setPreview('<div class="placeholder">Чтение файла...</div>');
@@ -2769,8 +2958,50 @@ document.addEventListener('DOMContentLoaded', () => {
   const exportBtn = document.getElementById('exportDbBtn');
   if (exportBtn) exportBtn.addEventListener('click', exportDatabase);
 
-  const wipeBtn = document.getElementById('wipeDbBtn');
+    const wipeBtn = document.getElementById('wipeDbBtn');
   if (wipeBtn) wipeBtn.addEventListener('click', wipeAllData);
+
+  // ===== Обработчики фильтров экрана «Операции» =====
+  const opFilters = [
+    { id: 'opFilterFrom', key: 'from' },
+    { id: 'opFilterTo', key: 'to' },
+    { id: 'opFilterType', key: 'type' },
+    { id: 'opFilterMarket', key: 'market' },
+    { id: 'opFilterCurrency', key: 'currency' },
+    { id: 'opFilterAccount', key: 'account' },
+    { id: 'opFilterSearch', key: 'search' },
+    { id: 'opSortOrder', key: 'order' }
+  ];
+
+  opFilters.forEach(f => {
+    const el = document.getElementById(f.id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      opState.filters[f.key] = el.value;
+      applyOperationsFilters();
+    });
+    el.addEventListener('change', () => {
+      opState.filters[f.key] = el.value;
+      applyOperationsFilters();
+    });
+  });
+
+  const clearBtn = document.getElementById('opClearFilters');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      Object.keys(opState.filters).forEach(k => {
+        opState.filters[k] = k === 'order' ? 'desc' : '';
+      });
+      opFilters.forEach(f => {
+        const el = document.getElementById(f.id);
+        if (el) el.value = f.key === 'order' ? 'desc' : '';
+      });
+      applyOperationsFilters();
+    });
+  }
+
+  const loadMoreBtn = document.getElementById('opLoadMore');
+  if (loadMoreBtn) loadMoreBtn.addEventListener('click', renderOperationsChunk);
 });
 
 window.addEventListener('popstate', () => {

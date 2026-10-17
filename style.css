@@ -810,3 +810,44 @@ h2 {
 #importResult {
   margin-top: 12px;
 }
+
+/* Экран «Операции» */
+.filter-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.filter-row:last-child {
+  border-bottom: none;
+}
+
+.filter-row label {
+  font-size: 13px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.filter-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--card-bg);
+  color: var(--text);
+  max-width: 60%;
+}
+
+.op-account {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg);
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}

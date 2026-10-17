@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'">
   <meta name="theme-color" content="#0d6e4f">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=28">
+  <link rel="stylesheet" href="style.css?v=29">
   <title>Инвестиции</title>
 </head>
 <body>
@@ -159,7 +159,66 @@
     <!-- Операции -->
     <section id="screen-operations" class="screen">
       <h2>Операции</h2>
-      <div class="card placeholder">Журнал денежных операций</div>
+
+      <div class="card">
+        <div class="filter-row">
+          <label>Период с</label>
+          <input type="date" id="opFilterFrom" class="filter-input">
+        </div>
+        <div class="filter-row">
+          <label>по</label>
+          <input type="date" id="opFilterTo" class="filter-input">
+        </div>
+        <div class="filter-row">
+          <label>Тип операции</label>
+          <select id="opFilterType" class="filter-input">
+            <option value="">Все</option>
+          </select>
+        </div>
+        <div class="filter-row">
+          <label>Рынок</label>
+          <select id="opFilterMarket" class="filter-input">
+            <option value="">Все</option>
+          </select>
+        </div>
+        <div class="filter-row">
+          <label>Валюта</label>
+          <select id="opFilterCurrency" class="filter-input">
+            <option value="">Все</option>
+          </select>
+        </div>
+        <div class="filter-row">
+          <label>Счёт</label>
+          <select id="opFilterAccount" class="filter-input">
+            <option value="">Все</option>
+          </select>
+        </div>
+        <div class="filter-row">
+          <label>Поиск</label>
+          <input type="text" id="opFilterSearch" class="filter-input" placeholder="Эмитент, ISIN...">
+        </div>
+        <div class="filter-row">
+          <label>Сортировка</label>
+          <select id="opSortOrder" class="filter-input">
+            <option value="desc">Дата ↓ (новые сверху)</option>
+            <option value="asc">Дата ↑ (старые сверху)</option>
+          </select>
+        </div>
+        <button class="small-btn" id="opClearFilters" style="margin-top: 8px;">Сбросить фильтры</button>
+      </div>
+
+      <div class="card" id="opStatsCard">
+        <div class="import-row"><span>Найдено операций</span><span id="opCount">0</span></div>
+        <div class="import-row"><span>Приходы</span><span id="opIncome" class="positive">0</span></div>
+        <div class="import-row"><span>Расходы</span><span id="opExpense" class="negative">0</span></div>
+        <div class="import-row"><span>Чистый поток</span><span id="opNet">0</span></div>
+      </div>
+
+      <div id="opList" class="card">
+        <div class="placeholder">Загрузка...</div>
+      </div>
+
+      <button class="secondary-btn" id="opLoadMore" style="display: none;">Показать ещё 100</button>
     </section>
 
     <!-- Настройки -->
@@ -216,7 +275,7 @@
   </nav>
 
   <script src="lib/xlsx.full.min.js"></script>
-  <script src="db.js?v=28"></script>
-  <script src="app.js?v=28"></script>
+  <script src="db.js?v=29"></script>
+  <script src="app.js?v=29"></script>
 </body>
 </html>
