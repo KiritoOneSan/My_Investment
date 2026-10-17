@@ -264,6 +264,8 @@ async function initDb() {
   ensureColumn('securities', 'last_seen_date', 'TEXT');
 
   ensureColumn('trades', 'market', 'TEXT');
+  ensureColumn('trades', 'currency', 'TEXT');
+  ensureColumn('trades', 'currency_settle', 'TEXT');
   ensureColumn('trades', 'security_isin', 'TEXT');
   ensureColumn('trades', 'security_name', 'TEXT');
   ensureColumn('trades', 'commission_calc_kopecks', 'INTEGER');

@@ -1947,12 +1947,13 @@ async function saveTrades(trades, accountId) {
       type: 'run',
       sql: `INSERT OR IGNORE INTO trades
         (trade_number, account_id, security_isin, security_name, trade_date, trade_type,
-         quantity, price, amount_kopecks, nkd_kopecks, commission_calc_kopecks,
-         commission_exec_kopecks, counterparty, place, market)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         quantity, price, currency, currency_settle, amount_kopecks, nkd_kopecks,
+         commission_calc_kopecks, commission_exec_kopecks, counterparty, place, market)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params: [
         t.trade_number, accountId, t.isin || null, t.name, t.trade_date, t.trade_type,
-        t.quantity, t.price, t.amount_kopecks, t.nkd_kopecks,
+        t.quantity, t.price, t.currency || null, t.currency_settle || null,
+        t.amount_kopecks, t.nkd_kopecks,
         t.commission_calc_kopecks, t.commission_exec_kopecks,
         t.counterparty, t.place, t.market
       ]
@@ -1965,7 +1966,7 @@ async function saveTrades(trades, accountId) {
       await window.db.transaction(queries);
     } catch (err) {
       if (/UNIQUE constraint failed/i.test(err.message)) {
-        console.warn('[trades] Дубликаты в trades, часть пропущена');
+        console.warn('[trades] Дубликаты, часть пропущена');
         return { saved: Math.floor(saved / 2), skipped: Math.ceil(saved / 2) };
       }
       throw err;
@@ -2864,8 +2865,9 @@ async function initTradesScreen() {
   try {
     // 1. Сделки с ЦБ
     const secRows = await window.db.select(
-      `SELECT t.id, t.trade_number, t.trade_date, t.trade_type,
-              t.quantity, t.price, t.currency, t.amount_kopecks,
+        `SELECT t.id, t.trade_number, t.trade_date, t.trade_type,
+              t.quantity, t.price, COALESCE(t.currency, t.currency_settle) AS currency,
+              t.amount_kopecks,
               t.nkd_kopecks, t.commission_calc_kopecks, t.commission_exec_kopecks,
               t.counterparty, t.place, t.market, t.account_id,
               COALESCE(t.security_name, s.name) AS security_name,
