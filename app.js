@@ -3478,30 +3478,52 @@ function renderPortfoliosContent(byType, filters) {
   el.innerHTML = html;
 }
 
-// Рендер одной строки позиции
+// Рендер одной строки позиции — в табличном виде
 function renderPfRow(p) {
-  const parts = [];
-  if (p.currency) parts.push(p.currency);
-  if (p.quantity != null) parts.push(`${formatNum(p.quantity, 0)} шт`);
-  if (p.price != null) parts.push(`цена ${formatNum(p.price, 4)}`);
-  if (p.coupon_rate) parts.push(`купон ${formatNum(p.coupon_rate, 2)}%`);
-  if (p.payment_date) parts.push(`до ${p.payment_date}`);
+  const qty = p.quantity != null ? formatNum(p.quantity, 0) : '—';
+  const price = p.price != null ? formatNum(p.price, 4) : '—';
+  const sum = p.value_rub_kopecks != null ? formatRub(p.value_rub_kopecks) : '—';
 
-  const valueHtml = p.value_rub_kopecks != null
-    ? `<div class="pf-item-value">${formatRub(p.value_rub_kopecks)}</div>`
-    : '';
+  // Инфо: купон и дата погашения для облигаций
+  const infoParts = [];
+  if (p.coupon_rate != null && p.coupon_rate > 0) {
+    infoParts.push(`купон ${formatNum(p.coupon_rate, 2)}%`);
+  }
+  if (p.payment_date) {
+    infoParts.push(`до ${p.payment_date}`);
+  }
+  const info = infoParts.join(', ');
+
+  // Цена в валюте бумаги — если валюта не RUB, показываем пометку
+  const currencyMark = (p.currency && p.currency !== 'RUB') ? p.currency : '';
 
   return `
-    <div class="list-item pf-list-item">
-      <div class="pf-item-main">
+    <div class="list-item pf-row">
+      <div class="pf-cell-name">
         <div class="pf-item-name">${escapeHtml(p.security_name || p.security_isin)}</div>
-        <div class="pf-item-meta">${escapeHtml(p.security_isin || '')}${parts.length ? ' · ' + parts.join(' · ') : ''}</div>
+        <div class="pf-item-meta">${escapeHtml(p.security_isin || '')}</div>
       </div>
-      ${valueHtml}
+      <div class="pf-cell-num">
+        <div class="pf-col-label">Кол-во</div>
+        <div class="pf-col-value">${qty}</div>
+      </div>
+      <div class="pf-cell-num">
+        <div class="pf-col-label">Цена</div>
+        <div class="pf-col-value">${price}${currencyMark ? ' ' + currencyMark : ''}</div>
+      </div>
+      <div class="pf-cell-num pf-cell-sum">
+        <div class="pf-col-label">Сумма</div>
+        <div class="pf-col-value">${sum}</div>
+      </div>
+      ${info ? `
+        <div class="pf-cell-info">
+          <div class="pf-col-label">Инфо</div>
+          <div class="pf-col-value">${info}</div>
+        </div>
+      ` : ''}
     </div>
   `;
 }
-
 
 async function handleFile(file) {
   if (!file) return;
