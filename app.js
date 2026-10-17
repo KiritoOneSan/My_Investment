@@ -2558,7 +2558,9 @@ async function doImportPending() {
         html += `<div class="import-row"><span>Валютные сделки</span><span>${stats.saved.currency_trades}</span></div>`;
       html += `<div class="import-row"><span>Денежные операции</span><span>${stats.saved.cash_operations}</span></div>`;
       html += `<div class="import-row"><span>Справочник бумаг</span><span>${stats.saved.securities}</span></div>`;
-      if (stats.saved.futures_positions > 0)
+      if (stats.saved.positions > 0)
+        html += `<div class="import-row"><span>Позиции</span><span>${stats.saved.positions}</span></div>`;
+	  if (stats.saved.futures_positions > 0)
         html += `<div class="import-row"><span>Позиции производные</span><span>${stats.saved.futures_positions}</span></div>`;
       html += `<div class="import-row"><span>Снимок портфеля</span><span>${stats.saved.snapshots}</span></div>`;
     } else {
