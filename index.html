@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'">
   <meta name="theme-color" content="#0d6e4f">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=35">
+  <link rel="stylesheet" href="style.css?v=36">
   <title>Инвестиции</title>
 </head>
 <body>
@@ -84,7 +84,7 @@
       <div class="notice">По 3 позициям нет данных о покупке</div>
     </section>
 
-    <!-- Портфели -->
+	<!-- Портфели -->
     <section id="screen-portfolios" class="screen">
       <div class="toggle-row">
         <button class="toggle active" id="pfModeCombined">Сводно</button>
@@ -97,6 +97,14 @@
           <span class="filter-active-count" id="pfFilterCount"></span>
         </summary>
         <div class="filter-collapsible-body">
+          <div class="filter-row">
+            <label>Период с</label>
+            <input type="date" id="pfFilterFrom" class="filter-input">
+          </div>
+          <div class="filter-row">
+            <label>по</label>
+            <input type="date" id="pfFilterTo" class="filter-input">
+          </div>
           <div class="filter-row">
             <label>Счёт</label>
             <select id="pfFilterAccount" class="filter-input">
@@ -357,7 +365,7 @@
   </nav>
 
   <script src="lib/xlsx.full.min.js"></script>
-  <script src="db.js?v=35"></script>
-  <script src="app.js?v=35"></script>
+  <script src="db.js?v=36"></script>
+  <script src="app.js?v=36"></script>
 </body>
 </html>
