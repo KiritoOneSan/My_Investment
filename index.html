@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'">
   <meta name="theme-color" content="#0d6e4f">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=32">
+  <link rel="stylesheet" href="style.css?v=33">
   <title>Инвестиции</title>
 </head>
 <body>
@@ -87,35 +87,45 @@
     <!-- Портфели -->
     <section id="screen-portfolios" class="screen">
       <div class="toggle-row">
-        <button class="toggle active" data-mode="combined">Сводно</button>
-        <button class="toggle" data-mode="by-account">По счетам</button>
+        <button class="toggle active" id="pfModeCombined">Сводно</button>
+        <button class="toggle" id="pfModeByAccount">По счетам</button>
       </div>
-      <h2>Деньги</h2>
-      <div class="list">
-        <div class="list-item"><span>RUB</span><span>73 288,04 ₽</span></div>
-        <div class="list-item"><span>CNY</span><span>515,82 CNY</span></div>
+
+      <details class="filter-collapsible" id="pfFiltersDetails">
+        <summary class="filter-collapsible-header">
+          <span>Фильтры</span>
+          <span class="filter-active-count" id="pfFilterCount"></span>
+        </summary>
+        <div class="filter-collapsible-body">
+          <div class="filter-row">
+            <label>Счёт</label>
+            <select id="pfFilterAccount" class="filter-input">
+              <option value="">Все</option>
+            </select>
+          </div>
+          <div class="filter-row">
+            <label>Сортировка</label>
+            <select id="pfSortOrder" class="filter-input">
+              <option value="alpha">По алфавиту (А→Я)</option>
+              <option value="value_desc">Стоимость ↓</option>
+              <option value="value_asc">Стоимость ↑</option>
+            </select>
+          </div>
+          <button class="small-btn" id="pfClearFilters" style="margin-top: 8px;">Сбросить фильтры</button>
+        </div>
+      </details>
+
+      <div class="card" id="pfStatsCard">
+        <div class="import-row"><span>Стоимость бумаг</span><span id="pfSecValue">0</span></div>
+        <div class="import-row"><span>Денежные средства</span><span id="pfCashValue">0</span></div>
+        <div class="import-row"><span>Всего активов</span><span id="pfTotalValue">0</span></div>
       </div>
-      <h2>Акции</h2>
-      <div class="list">
-        <div class="list-item"><span>Сбербанк ао</span><span>12 198 ₽</span></div>
-        <div class="list-item"><span>Газпром а.о.</span><span>14 708,40 ₽</span></div>
-        <div class="list-item"><span>МТС-ао</span><span>12 585 ₽</span></div>
-      </div>
-      <h2>Облигации</h2>
-      <div class="list">
-        <div class="list-item"><span>Атомэнп05</span><span>55 886,78 ₽</span></div>
-        <div class="list-item"><span>РЖД 1Р38R</span><span>40 164,32 ₽</span></div>
-      </div>
-      <h2>Еврооблигации</h2>
-      <div class="list">
-        <div class="list-item"><span>МЕТАЛИН1P2</span><span>43 054,28 ₽</span></div>
-      </div>
-      <h2>Паи</h2>
-      <div class="list">
-        <div class="list-item"><span>Рентал ПРО</span><span>60 474 ₽</span></div>
+
+      <div id="pfContent">
+        <div class="placeholder">Загрузка...</div>
       </div>
     </section>
-
+	
     <!-- Ещё -->
     <section id="screen-more" class="screen">
       <div class="menu">
@@ -347,7 +357,7 @@
   </nav>
 
   <script src="lib/xlsx.full.min.js"></script>
-  <script src="db.js?v=32"></script>
-  <script src="app.js?v=32"></script>
+  <script src="db.js?v=33"></script>
+  <script src="app.js?v=33"></script>
 </body>
 </html>

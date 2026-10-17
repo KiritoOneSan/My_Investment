@@ -50,6 +50,13 @@ function navigate(screenKey, addToHistory = true) {
       initTradesScreen();
     }
   }
+  if (screenKey === 'portfolios') {
+    if (!pfState.loaded) {
+      initPortfoliosScreen();
+    } else {
+      initPortfoliosScreen();
+    }
+  }
   currentScreen = screenKey;
 }
 
@@ -3142,6 +3149,202 @@ function renderTradesChunk() {
   }
 }
 
+// ============================================================
+// ===== Этап 4.3: Экран «Портфели» ==========================
+// ============================================================
+
+const pfState = {
+  loaded: false,
+  mode: 'combined',  // combined | by-account
+  filters: {
+    account: '',
+    order: 'alpha'
+  },
+  securities: [],   // все бумаги из базы
+  accounts: [],     // все аккаунты
+  snapshots: [],    // последние снимки портфеля по счетам
+  cashByCurrency: {}, // { RUB: ..., CNY: ..., USD: ... } — из свежих report_snapshots
+  latestReportDate: null
+};
+
+async function initPortfoliosScreen() {
+  if (!window.db || !window.db.ready) return;
+
+  try {
+    // 1. Все бумаги
+    pfState.securities = await window.db.select(
+      'SELECT * FROM securities ORDER BY name'
+    );
+
+    // 2. Все аккаунты
+    pfState.accounts = await window.db.select(
+      'SELECT id, code, display_name, name, broker FROM accounts ORDER BY id'
+    );
+
+    // 3. Денежные остатки из последнего report_snapshot по каждому счёту
+    const latestReports = await window.db.select(
+      `SELECT rs.*
+       FROM report_snapshots rs
+       INNER JOIN (
+         SELECT account_id, MAX(snapshot_date) AS max_date
+         FROM report_snapshots
+         GROUP BY account_id
+       ) latest ON latest.account_id = rs.account_id AND latest.max_date = rs.snapshot_date`
+    );
+
+    // Собираем денежные остатки
+    const cash = { RUB: 0, CNY: 0, USD: 0 };
+    let latestDate = null;
+    for (const r of latestReports) {
+      if (r.cash_rub_kopecks != null) cash.RUB += r.cash_rub_kopecks;
+      if (r.cash_cny_kopecks != null) cash.CNY += r.cash_cny_kopecks;
+      if (r.cash_usd_kopecks != null) cash.USD += r.cash_usd_kopecks;
+      if (!latestDate || r.snapshot_date > latestDate) latestDate = r.snapshot_date;
+    }
+    pfState.cashByCurrency = cash;
+    pfState.latestReportDate = latestDate;
+
+    // 4. Заполняем фильтр по счетам
+    const accSelect = document.getElementById('pfFilterAccount');
+    if (accSelect) {
+      accSelect.innerHTML = '<option value="">Все</option>' +
+        pfState.accounts.map(a => {
+          const label = a.display_name || a.name || a.code;
+          return `<option value="${a.id}">${escapeHtml(label)}</option>`;
+        }).join('');
+    }
+
+    pfState.loaded = true;
+    applyPortfolioFilters();
+
+  } catch (err) {
+    console.error('[portfolios] Ошибка:', err);
+    const el = document.getElementById('pfContent');
+    if (el) el.innerHTML = `<div class="import-error">Ошибка: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function applyPortfolioFilters() {
+  const f = pfState.filters;
+  const mode = pfState.mode;
+
+  // Счётчик активных фильтров
+  const activeCount = ['account'].filter(k => f[k] !== '').length;
+  const countEl = document.getElementById('pfFilterCount');
+  if (countEl) countEl.textContent = activeCount > 0 ? `· ${activeCount}` : '';
+
+  // Группируем бумаги
+  const byType = {
+    'АКЦИЯ': [],
+    'ОБЛИГАЦИЯ': [],
+    'ЕВРООБЛИГАЦИЯ': [],
+    'ПАЙ': []
+  };
+
+  for (const s of pfState.securities) {
+    if (!byType[s.type]) continue;
+    byType[s.type].push(s);
+  }
+
+  // Сортируем внутри каждой группы
+  for (const type of Object.keys(byType)) {
+    byType[type].sort((a, b) => {
+      if (f.order === 'alpha') return (a.name || '').localeCompare(b.name || '');
+      // Для сортировки по стоимости будем считать на лету
+      return 0;
+    });
+  }
+
+  // Если сортировка по стоимости — считаем стоимость для каждой бумаги
+  if (f.order.startsWith('value')) {
+    // Стоимость бумаги = последняя цена из snapshot, увы её нет в securities.
+    // Сделаем приближение: возьмём оценку из последнего report_snapshot по её ISIN.
+    // Но там нет per-paper данных, только агрегаты.
+    // Поэтому сортировка по стоимости пока — заглушка. Сортируем по алфавиту.
+    for (const type of Object.keys(byType)) {
+      byType[type].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    }
+  }
+
+  // Считаем итоги
+  let secValue = 0;
+  for (const type of Object.keys(byType)) {
+    // Оценки per-paper у нас нет, поэтому секция "стоимость" будет 0.
+    // Это ограничение текущих данных: в базе нет цен бумаг на дату.
+  }
+  const cashRub = pfState.cashByCurrency.RUB || 0;
+  const cashCny = pfState.cashByCurrency.CNY || 0;
+  const cashUsd = pfState.cashByCurrency.USD || 0;
+  const cashTotal = cashRub + cashCny + cashUsd;
+  const total = secValue + cashTotal;
+
+  document.getElementById('pfSecValue').textContent = formatRub(secValue);
+  document.getElementById('pfCashValue').textContent = formatRub(cashTotal);
+  document.getElementById('pfTotalValue').textContent = formatRub(total);
+
+  // Рисуем содержимое
+  renderPortfoliosContent(byType, mode, f);
+}
+
+function renderPortfoliosContent(byType, mode, filters) {
+  const el = document.getElementById('pfContent');
+  if (!el) return;
+
+  // Деньги
+  const cash = pfState.cashByCurrency;
+  const cashItems = [];
+  if (cash.RUB > 0) cashItems.push(`<div class="list-item"><span>RUB</span><span>${formatRub(cash.RUB)}</span></div>`);
+  if (cash.CNY > 0) cashItems.push(`<div class="list-item"><span>CNY</span><span>${formatNum(cash.CNY / 100, 2)} CNY</span></div>`);
+  if (cash.USD > 0) cashItems.push(`<div class="list-item"><span>USD</span><span>${formatNum(cash.USD / 100, 2)} USD</span></div>`);
+
+  let html = '';
+
+  // Блок «Деньги»
+  if (cashItems.length > 0) {
+    html += `<h2>Деньги${pfState.latestReportDate ? ' <span class="pf-date">на ' + pfState.latestReportDate + '</span>' : ''}</h2>`;
+    html += `<div class="list">${cashItems.join('')}</div>`;
+  }
+
+  // Блоки по типам
+  const typeLabels = {
+    'АКЦИЯ': 'Акции',
+    'ОБЛИГАЦИЯ': 'Облигации',
+    'ЕВРООБЛИГАЦИЯ': 'Еврооблигации',
+    'ПАЙ': 'Паи'
+  };
+
+  let hasSecurities = false;
+  for (const type of ['АКЦИЯ', 'ОБЛИГАЦИЯ', 'ЕВРООБЛИГАЦИЯ', 'ПАЙ']) {
+    const items = byType[type];
+    if (!items || items.length === 0) continue;
+    hasSecurities = true;
+
+    const rowsHtml = items.map(s => {
+      const parts = [];
+      if (s.currency) parts.push(s.currency);
+      if (s.nominal) parts.push(`номинал ${formatNum(s.nominal, 0)}`);
+      if (s.coupon_rate) parts.push(`купон ${formatNum(s.coupon_rate, 2)}%`);
+      return `
+        <div class="list-item pf-list-item">
+          <div class="pf-item-main">
+            <div class="pf-item-name">${escapeHtml(s.name)}</div>
+            <div class="pf-item-meta">${escapeHtml(s.isin || '')}${parts.length ? ' · ' + parts.join(' · ') : ''}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    html += `<h2>${typeLabels[type]} <span class="pf-count">${items.length}</span></h2>`;
+    html += `<div class="list">${rowsHtml}</div>`;
+  }
+
+  if (!hasSecurities && cashItems.length === 0) {
+    html = '<div class="placeholder">Нет данных. Загрузите отчёт во вкладке «Импорт».</div>';
+  }
+
+  el.innerHTML = html;
+}
+
 async function handleFile(file) {
   if (!file) return;
   setPreview('<div class="placeholder">Чтение файла...</div>');
@@ -3271,7 +3474,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const exportBtn = document.getElementById('exportDbBtn');
   if (exportBtn) exportBtn.addEventListener('click', exportDatabase);
 
-    const wipeBtn = document.getElementById('wipeDbBtn');
+  const wipeBtn = document.getElementById('wipeDbBtn');
   if (wipeBtn) wipeBtn.addEventListener('click', wipeAllData);
 
   // ===== Обработчики фильтров экрана «Операции» =====
@@ -3366,6 +3569,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const trLoadMoreBtn = document.getElementById('trLoadMore');
   if (trLoadMoreBtn) trLoadMoreBtn.addEventListener('click', renderTradesChunk);
+
+  // ===== Обработчики экрана «Портфели» =====
+  const pfModeCombined = document.getElementById('pfModeCombined');
+  const pfModeByAccount = document.getElementById('pfModeByAccount');
+  if (pfModeCombined && pfModeByAccount) {
+    pfModeCombined.addEventListener('click', () => {
+      pfModeCombined.classList.add('active');
+      pfModeByAccount.classList.remove('active');
+      pfState.mode = 'combined';
+      applyPortfolioFilters();
+    });
+    pfModeByAccount.addEventListener('click', () => {
+      pfModeByAccount.classList.add('active');
+      pfModeCombined.classList.remove('active');
+      pfState.mode = 'by-account';
+      applyPortfolioFilters();
+    });
+  }
+
+  const pfFilterAccount = document.getElementById('pfFilterAccount');
+  if (pfFilterAccount) {
+    pfFilterAccount.addEventListener('change', () => {
+      pfState.filters.account = pfFilterAccount.value;
+      applyPortfolioFilters();
+    });
+  }
+
+  const pfSortOrder = document.getElementById('pfSortOrder');
+  if (pfSortOrder) {
+    pfSortOrder.addEventListener('change', () => {
+      pfState.filters.order = pfSortOrder.value;
+      applyPortfolioFilters();
+    });
+  }
+
+  const pfClearBtn = document.getElementById('pfClearFilters');
+  if (pfClearBtn) {
+    pfClearBtn.addEventListener('click', () => {
+      pfState.filters = { account: '', order: 'alpha' };
+      if (pfFilterAccount) pfFilterAccount.value = '';
+      if (pfSortOrder) pfSortOrder.value = 'alpha';
+      applyPortfolioFilters();
+    });
+  }
 });
 
 window.addEventListener('popstate', () => {
