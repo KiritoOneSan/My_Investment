@@ -2774,6 +2774,14 @@ function applyOperationsFilters() {
   document.getElementById('opExpense').textContent = formatRub(expense);
   document.getElementById('opNet').textContent = formatRub(income + expense);
 
+  // Счётчик активных фильтров
+  const activeFilters = ['from','to','type','market','currency','account','search']
+    .filter(k => f[k] !== '');
+  const countEl = document.getElementById('opFilterCount');
+  if (countEl) {
+    countEl.textContent = activeFilters.length > 0 ? `· ${activeFilters.length}` : '';
+  }
+  
   // Список
   renderOperationsChunk();
 }
@@ -3052,6 +3060,14 @@ function applyTradesFilters() {
   document.getElementById('trBuy').textContent = buy;
   document.getElementById('trSell').textContent = sell;
 
+  // Счётчик активных фильтров
+  const activeFilters = ['from','to','type','market','account','search']
+    .filter(k => f[k] !== '');
+  const countEl = document.getElementById('trFilterCount');
+  if (countEl) {
+    countEl.textContent = activeFilters.length > 0 ? `· ${activeFilters.length}` : '';
+  }
+  
   renderTradesChunk();
 }
 

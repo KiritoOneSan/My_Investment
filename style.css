@@ -870,3 +870,60 @@ h2 {
   font-size: 12px;
   padding: 8px 4px;
 }
+
+/* Сворачиваемые фильтры */
+.filter-collapsible {
+  background: var(--card-bg);
+  border-radius: 12px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  overflow: hidden;
+}
+
+.filter-collapsible[open] {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.filter-collapsible-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.filter-collapsible-header::-webkit-details-marker {
+  display: none;
+}
+
+.filter-collapsible-header::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+.filter-collapsible[open] .filter-collapsible-header::before {
+  transform: rotate(90deg);
+}
+
+.filter-active-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+  margin-left: auto;
+  margin-right: 0;
+}
+
+.filter-collapsible-body {
+  padding: 0 16px 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
