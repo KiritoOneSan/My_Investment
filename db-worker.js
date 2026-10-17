@@ -60,6 +60,25 @@ async function initDb() {
       issuer TEXT,
       last_seen_date TEXT
     );
+	
+	CREATE TABLE IF NOT EXISTS positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL,
+      snapshot_date TEXT NOT NULL,
+      security_isin TEXT NOT NULL,
+      security_name TEXT,
+      security_type TEXT,
+      quantity REAL NOT NULL,
+      price REAL,
+      currency TEXT,
+      nominal REAL,
+      nkd REAL,
+      coupon_rate REAL,
+      payment_date TEXT,
+      value_rub_kopecks INTEGER,
+      planned_value_rub_kopecks INTEGER,
+      external_hash TEXT UNIQUE
+    );
 
     CREATE TABLE IF NOT EXISTS trades (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -2130,6 +2130,55 @@ async function saveSecurities(positions, accountId, snapshotDate) {
   return { saved };
 }
 
+// --- Позиции на дату (снимок бумаг в портфеле) ---
+
+async function savePositions(positions, accountId, snapshotDate) {
+  if (!positions || positions.length === 0) return { saved: 0, skipped: 0 };
+
+  let saved = 0, skipped = 0;
+  const queries = [];
+
+  for (const p of positions) {
+    if (!p.isin) continue;
+
+    const hash = [p.isin, snapshotDate, accountId].join('|');
+    const exists = await window.db.select(
+      'SELECT id FROM positions WHERE external_hash = ? LIMIT 1',
+      [hash]
+    );
+    if (exists.length > 0) { skipped++; continue; }
+
+    queries.push({
+      type: 'run',
+      sql: `INSERT OR IGNORE INTO positions
+        (account_id, snapshot_date, security_isin, security_name, security_type,
+         quantity, price, currency, nominal, nkd, coupon_rate, payment_date,
+         value_rub_kopecks, planned_value_rub_kopecks, external_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      params: [
+        accountId, snapshotDate, p.isin, p.name, p.type,
+        p.outgoing_qty, p.price, p.currency, p.nominal, p.nkd,
+        p.coupon_rate, p.payment_date,
+        p.value_rub_kopecks, p.planned_value_rub_kopecks, hash
+      ]
+    });
+    saved++;
+  }
+
+  if (queries.length > 0) {
+    try {
+      await window.db.transaction(queries);
+    } catch (err) {
+      if (/UNIQUE constraint failed/i.test(err.message)) {
+        console.warn('[positions] Дубликаты, часть пропущена');
+        return { saved: Math.floor(saved / 2), skipped: Math.ceil(saved / 2) };
+      }
+      throw err;
+    }
+  }
+  return { saved, skipped };
+}
+
 // --- Снимок портфеля ---
 
 async function savePortfolioSnapshot(accountId, snapshotDate, parsedSec, parsedBalances) {
@@ -2299,6 +2348,7 @@ async function performImport(fileName, parsed) {
       currency_trades: 0,
       cash_operations: 0,
       securities: 0,
+      positions: 0,
       futures_positions: 0,
       snapshots: 0
     },
@@ -2307,6 +2357,7 @@ async function performImport(fileName, parsed) {
       futures_trades: 0,
       currency_trades: 0,
       cash_operations: 0,
+      positions: 0,
       futures_positions: 0
     },
     errors: [],
@@ -2343,6 +2394,13 @@ async function performImport(fileName, parsed) {
       stats.saved.securities = r.saved;
     }
 
+	// 4.1. Позиции на дату (снимок портфеля)
+    if (parsed.securities && parsed.securities.positions.length > 0) {
+      const r = await savePositions(parsed.securities.positions, stats.accountId, snapshotDate);
+      stats.saved.positions = r.saved;
+      stats.skipped.positions = r.skipped;
+    }
+	
     // 5. Сделки с ЦБ
     if (parsed.trades && parsed.trades.trades.length > 0) {
       const r = await saveTrades(parsed.trades.trades, stats.accountId);
@@ -3160,10 +3218,10 @@ const pfState = {
     account: '',
     order: 'alpha'
   },
-  securities: [],   // все бумаги из базы
-  accounts: [],     // все аккаунты
-  snapshots: [],    // последние снимки портфеля по счетам
-  cashByCurrency: {}, // { RUB: ..., CNY: ..., USD: ... } — из свежих report_snapshots
+  securities: [],
+  positions: [],     // снимок позиций на дату
+  accounts: [],
+  cashByCurrency: {},
   latestReportDate: null
 };
 
@@ -3171,7 +3229,7 @@ async function initPortfoliosScreen() {
   if (!window.db || !window.db.ready) return;
 
   try {
-    // 1. Все бумаги
+    // 1. Все бумаги (справочник) — на случай отсутствия позиций
     pfState.securities = await window.db.select(
       'SELECT * FROM securities ORDER BY name'
     );
@@ -3181,7 +3239,30 @@ async function initPortfoliosScreen() {
       'SELECT id, code, display_name, name, broker FROM accounts ORDER BY id'
     );
 
-    // 3. Денежные остатки из последнего report_snapshot по каждому счёту
+    // 3. Самые свежие позиции по каждому счёту
+    const latestPerAccount = await window.db.select(
+      `SELECT account_id, MAX(snapshot_date) AS max_date
+       FROM positions
+       GROUP BY account_id`
+    );
+
+    let latestPositions = [];
+    let latestDate = null;
+
+    for (const la of latestPerAccount) {
+      const rows = await window.db.select(
+        `SELECT * FROM positions
+         WHERE account_id = ? AND snapshot_date = ?`,
+        [la.account_id, la.max_date]
+      );
+      latestPositions = latestPositions.concat(rows);
+      if (!latestDate || la.max_date > latestDate) latestDate = la.max_date;
+    }
+
+    pfState.positions = latestPositions;
+    pfState.latestReportDate = latestDate;
+
+    // 4. Денежные остатки из последнего report_snapshot по каждому счёту
     const latestReports = await window.db.select(
       `SELECT rs.*
        FROM report_snapshots rs
@@ -3192,19 +3273,15 @@ async function initPortfoliosScreen() {
        ) latest ON latest.account_id = rs.account_id AND latest.max_date = rs.snapshot_date`
     );
 
-    // Собираем денежные остатки
     const cash = { RUB: 0, CNY: 0, USD: 0 };
-    let latestDate = null;
     for (const r of latestReports) {
       if (r.cash_rub_kopecks != null) cash.RUB += r.cash_rub_kopecks;
       if (r.cash_cny_kopecks != null) cash.CNY += r.cash_cny_kopecks;
       if (r.cash_usd_kopecks != null) cash.USD += r.cash_usd_kopecks;
-      if (!latestDate || r.snapshot_date > latestDate) latestDate = r.snapshot_date;
     }
     pfState.cashByCurrency = cash;
-    pfState.latestReportDate = latestDate;
 
-    // 4. Заполняем фильтр по счетам
+    // 5. Фильтр по счетам
     const accSelect = document.getElementById('pfFilterAccount');
     if (accSelect) {
       accSelect.innerHTML = '<option value="">Все</option>' +
@@ -3226,14 +3303,19 @@ async function initPortfoliosScreen() {
 
 function applyPortfolioFilters() {
   const f = pfState.filters;
-  const mode = pfState.mode;
 
   // Счётчик активных фильтров
-  const activeCount = ['account'].filter(k => f[k] !== '').length;
+  const activeCount = f.account ? 1 : 0;
   const countEl = document.getElementById('pfFilterCount');
   if (countEl) countEl.textContent = activeCount > 0 ? `· ${activeCount}` : '';
 
-  // Группируем бумаги
+  // Фильтруем позиции по счёту
+  let positions = pfState.positions.slice();
+  if (f.account) {
+    positions = positions.filter(p => String(p.account_id) === f.account);
+  }
+
+  // Группируем по типам
   const byType = {
     'АКЦИЯ': [],
     'ОБЛИГАЦИЯ': [],
@@ -3241,37 +3323,32 @@ function applyPortfolioFilters() {
     'ПАЙ': []
   };
 
-  for (const s of pfState.securities) {
-    if (!byType[s.type]) continue;
-    byType[s.type].push(s);
+  for (const p of positions) {
+    const type = p.security_type || '—';
+    if (!byType[type]) continue;
+    byType[type].push(p);
   }
 
   // Сортируем внутри каждой группы
   for (const type of Object.keys(byType)) {
     byType[type].sort((a, b) => {
-      if (f.order === 'alpha') return (a.name || '').localeCompare(b.name || '');
-      // Для сортировки по стоимости будем считать на лету
+      if (f.order === 'alpha') return (a.security_name || '').localeCompare(b.security_name || '');
+      const av = a.value_rub_kopecks || 0;
+      const bv = b.value_rub_kopecks || 0;
+      if (f.order === 'value_desc') return bv - av;
+      if (f.order === 'value_asc') return av - bv;
       return 0;
     });
-  }
-
-  // Если сортировка по стоимости — считаем стоимость для каждой бумаги
-  if (f.order.startsWith('value')) {
-    // Стоимость бумаги = последняя цена из snapshot, увы её нет в securities.
-    // Сделаем приближение: возьмём оценку из последнего report_snapshot по её ISIN.
-    // Но там нет per-paper данных, только агрегаты.
-    // Поэтому сортировка по стоимости пока — заглушка. Сортируем по алфавиту.
-    for (const type of Object.keys(byType)) {
-      byType[type].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    }
   }
 
   // Считаем итоги
   let secValue = 0;
   for (const type of Object.keys(byType)) {
-    // Оценки per-paper у нас нет, поэтому секция "стоимость" будет 0.
-    // Это ограничение текущих данных: в базе нет цен бумаг на дату.
+    for (const p of byType[type]) {
+      if (p.value_rub_kopecks != null) secValue += p.value_rub_kopecks;
+    }
   }
+
   const cashRub = pfState.cashByCurrency.RUB || 0;
   const cashCny = pfState.cashByCurrency.CNY || 0;
   const cashUsd = pfState.cashByCurrency.USD || 0;
@@ -3282,15 +3359,13 @@ function applyPortfolioFilters() {
   document.getElementById('pfCashValue').textContent = formatRub(cashTotal);
   document.getElementById('pfTotalValue').textContent = formatRub(total);
 
-  // Рисуем содержимое
-  renderPortfoliosContent(byType, mode, f);
+  renderPortfoliosContent(byType, f);
 }
 
-function renderPortfoliosContent(byType, mode, filters) {
+function renderPortfoliosContent(byType, filters) {
   const el = document.getElementById('pfContent');
   if (!el) return;
 
-  // Деньги
   const cash = pfState.cashByCurrency;
   const cashItems = [];
   if (cash.RUB > 0) cashItems.push(`<div class="list-item"><span>RUB</span><span>${formatRub(cash.RUB)}</span></div>`);
@@ -3299,13 +3374,11 @@ function renderPortfoliosContent(byType, mode, filters) {
 
   let html = '';
 
-  // Блок «Деньги»
   if (cashItems.length > 0) {
     html += `<h2>Деньги${pfState.latestReportDate ? ' <span class="pf-date">на ' + pfState.latestReportDate + '</span>' : ''}</h2>`;
     html += `<div class="list">${cashItems.join('')}</div>`;
   }
 
-  // Блоки по типам
   const typeLabels = {
     'АКЦИЯ': 'Акции',
     'ОБЛИГАЦИЯ': 'Облигации',
@@ -3313,32 +3386,43 @@ function renderPortfoliosContent(byType, mode, filters) {
     'ПАЙ': 'Паи'
   };
 
-  let hasSecurities = false;
+  let hasPositions = false;
   for (const type of ['АКЦИЯ', 'ОБЛИГАЦИЯ', 'ЕВРООБЛИГАЦИЯ', 'ПАЙ']) {
     const items = byType[type];
     if (!items || items.length === 0) continue;
-    hasSecurities = true;
+    hasPositions = true;
 
-    const rowsHtml = items.map(s => {
+    const rowsHtml = items.map(p => {
       const parts = [];
-      if (s.currency) parts.push(s.currency);
-      if (s.nominal) parts.push(`номинал ${formatNum(s.nominal, 0)}`);
-      if (s.coupon_rate) parts.push(`купон ${formatNum(s.coupon_rate, 2)}%`);
+      if (p.currency) parts.push(p.currency);
+      if (p.quantity != null) parts.push(`${formatNum(p.quantity, 0)} шт`);
+      if (p.price != null) parts.push(`цена ${formatNum(p.price, 4)}`);
+      if (p.coupon_rate) parts.push(`купон ${formatNum(p.coupon_rate, 2)}%`);
+      if (p.payment_date) parts.push(`до ${p.payment_date}`);
+
+      const valueHtml = p.value_rub_kopecks != null
+        ? `<div class="pf-item-value">${formatRub(p.value_rub_kopecks)}</div>`
+        : '';
+
       return `
         <div class="list-item pf-list-item">
           <div class="pf-item-main">
-            <div class="pf-item-name">${escapeHtml(s.name)}</div>
-            <div class="pf-item-meta">${escapeHtml(s.isin || '')}${parts.length ? ' · ' + parts.join(' · ') : ''}</div>
+            <div class="pf-item-name">${escapeHtml(p.security_name || p.security_isin)}</div>
+            <div class="pf-item-meta">${escapeHtml(p.security_isin || '')}${parts.length ? ' · ' + parts.join(' · ') : ''}</div>
           </div>
+          ${valueHtml}
         </div>
       `;
     }).join('');
 
-    html += `<h2>${typeLabels[type]} <span class="pf-count">${items.length}</span></h2>`;
+    const totalValueKopecks = items.reduce((s, p) => s + (p.value_rub_kopecks || 0), 0);
+    const totalLabel = totalValueKopecks > 0 ? ` · ${formatRub(totalValueKopecks)}` : '';
+
+    html += `<h2>${typeLabels[type]} <span class="pf-count">${items.length}${totalLabel}</span></h2>`;
     html += `<div class="list">${rowsHtml}</div>`;
   }
 
-  if (!hasSecurities && cashItems.length === 0) {
+  if (!hasPositions && cashItems.length === 0) {
     html = '<div class="placeholder">Нет данных. Загрузите отчёт во вкладке «Импорт».</div>';
   }
 

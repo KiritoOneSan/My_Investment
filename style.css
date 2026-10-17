@@ -969,3 +969,22 @@ h2 {
   line-height: 1.3;
   word-break: break-word;
 }
+
+.pf-list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.pf-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.pf-item-value {
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
