@@ -851,3 +851,22 @@ h2 {
   border-radius: 10px;
   white-space: nowrap;
 }
+
+/* Экран «Сделки» */
+.trade-kind-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  background: rgba(13, 110, 79, 0.1);
+  color: var(--primary);
+  font-weight: 600;
+  margin-right: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+[data-trade-tab] {
+  font-size: 12px;
+  padding: 8px 4px;
+}

@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'">
   <meta name="theme-color" content="#0d6e4f">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=29">
+  <link rel="stylesheet" href="style.css?v=30">
   <title>Инвестиции</title>
 </head>
 <body>
@@ -153,7 +153,67 @@
     <!-- Сделки -->
     <section id="screen-trades" class="screen">
       <h2>Сделки</h2>
-      <div class="card placeholder">Журнал сделок</div>
+
+      <!-- Переключатель типов -->
+      <div class="toggle-row">
+        <button class="toggle active" data-trade-tab="all">Все</button>
+        <button class="toggle" data-trade-tab="securities">ЦБ</button>
+        <button class="toggle" data-trade-tab="futures">Производные</button>
+        <button class="toggle" data-trade-tab="currency">Валютные</button>
+      </div>
+
+      <div class="card">
+        <div class="filter-row">
+          <label>Период с</label>
+          <input type="date" id="trFilterFrom" class="filter-input">
+        </div>
+        <div class="filter-row">
+          <label>по</label>
+          <input type="date" id="trFilterTo" class="filter-input">
+        </div>
+        <div class="filter-row">
+          <label>Вид сделки</label>
+          <select id="trFilterType" class="filter-input">
+            <option value="">Все</option>
+          </select>
+        </div>
+        <div class="filter-row">
+          <label>Рынок</label>
+          <select id="trFilterMarket" class="filter-input">
+            <option value="">Все</option>
+          </select>
+        </div>
+        <div class="filter-row">
+          <label>Счёт</label>
+          <select id="trFilterAccount" class="filter-input">
+            <option value="">Все</option>
+          </select>
+        </div>
+        <div class="filter-row">
+          <label>Поиск</label>
+          <input type="text" id="trFilterSearch" class="filter-input" placeholder="Бумага, код, контрагент...">
+        </div>
+        <div class="filter-row">
+          <label>Сортировка</label>
+          <select id="trSortOrder" class="filter-input">
+            <option value="desc">Дата ↓ (новые сверху)</option>
+            <option value="asc">Дата ↑ (старые сверху)</option>
+          </select>
+        </div>
+        <button class="small-btn" id="trClearFilters" style="margin-top: 8px;">Сбросить фильтры</button>
+      </div>
+
+      <div class="card" id="trStatsCard">
+        <div class="import-row"><span>Найдено сделок</span><span id="trCount">0</span></div>
+        <div class="import-row"><span>Покупки</span><span id="trBuy">0</span></div>
+        <div class="import-row"><span>Продажи</span><span id="trSell">0</span></div>
+      </div>
+
+      <div id="trList" class="card">
+        <div class="placeholder">Загрузка...</div>
+      </div>
+
+      <button class="secondary-btn" id="trLoadMore" style="display: none;">Показать ещё 100</button>
     </section>
 
     <!-- Операции -->
@@ -275,7 +335,7 @@
   </nav>
 
   <script src="lib/xlsx.full.min.js"></script>
-  <script src="db.js?v=29"></script>
-  <script src="app.js?v=29"></script>
+  <script src="db.js?v=30"></script>
+  <script src="app.js?v=30"></script>
 </body>
 </html>

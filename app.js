@@ -43,6 +43,13 @@ function navigate(screenKey, addToHistory = true) {
       initOperationsScreen();
     }
   }
+  if (screenKey === 'trades') {
+    if (!trState.loaded) {
+      initTradesScreen();
+    } else {
+      initTradesScreen();
+    }
+  }
   currentScreen = screenKey;
 }
 
@@ -2829,6 +2836,294 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
+// ============================================================
+// ===== Этап 4.2: Экран «Сделки» ============================
+// ============================================================
+
+const trState = {
+  loaded: false,
+  activeTab: 'all',  // all | securities | futures | currency
+  filters: {
+    from: '',
+    to: '',
+    type: '',
+    market: '',
+    account: '',
+    search: '',
+    order: 'desc'
+  },
+  allRows: [],
+  filteredRows: [],
+  renderedCount: 0
+};
+
+// Загрузка и инициализация экрана
+async function initTradesScreen() {
+  if (!window.db || !window.db.ready) return;
+
+  try {
+    // 1. Сделки с ЦБ
+    const secRows = await window.db.select(
+      `SELECT t.id, t.trade_number, t.trade_date, t.trade_type,
+              t.quantity, t.price, t.currency, t.amount_kopecks,
+              t.nkd_kopecks, t.commission_calc_kopecks, t.commission_exec_kopecks,
+              t.counterparty, t.place, t.market, t.account_id,
+              COALESCE(t.security_name, s.name) AS security_name,
+              COALESCE(t.security_isin, s.isin) AS security_isin,
+              a.code AS account_code, a.display_name AS account_name
+       FROM trades t
+       LEFT JOIN accounts a ON a.id = t.account_id
+       LEFT JOIN securities s ON s.isin = t.security_isin
+       WHERE 1=1
+       ORDER BY t.trade_date DESC, t.id DESC`
+    );
+
+    // 2. Сделки по производным
+    const futRows = await window.db.select(
+      `SELECT id, trade_date, trade_type, quantity, price,
+              commission_calc_kopecks, commission_exec_kopecks,
+              counterparty, place, comment, market, account_id,
+              contract_code
+       FROM futures_trades
+       WHERE 1=1
+       ORDER BY trade_date DESC, id DESC`
+    );
+    for (const r of futRows) {
+      r.trade_number = null;
+    }
+
+    // 3. Валютные сделки
+    const currRows = await window.db.select(
+      `SELECT id, trade_number, trade_date, trade_type, quantity, price,
+              currency, amount_kopecks, commission_calc_kopecks,
+              commission_exec_kopecks, execution_date, counterparty, place, comment,
+              market, account_id, instrument
+       FROM currency_trades
+       WHERE 1=1
+       ORDER BY trade_date DESC, id DESC`
+    );
+
+    // Приводим к общему виду
+    const unified = [];
+
+    for (const r of secRows) {
+      unified.push({
+        kind: 'securities',
+        id: r.id,
+        trade_date: r.trade_date,
+        trade_type: r.trade_type,
+        market: r.market,
+        title: r.security_name || r.security_isin || '—',
+        subtitle: r.security_isin || '',
+        quantity: r.quantity,
+        price: r.price,
+        currency: r.currency,
+        amount_kopecks: r.amount_kopecks,
+        trade_number: r.trade_number,
+        counterparty: r.counterparty,
+        account_id: r.account_id,
+        account_name: r.account_name || r.account_code
+      });
+    }
+
+    for (const r of futRows) {
+      unified.push({
+        kind: 'futures',
+        id: r.id,
+        trade_date: r.trade_date,
+        trade_type: r.trade_type,
+        market: r.market || 'Срочный рынок',
+        title: r.contract_code,
+        subtitle: '',
+        quantity: r.quantity,
+        price: r.price,
+        currency: 'пункты',
+        amount_kopecks: null,
+        trade_number: null,
+        counterparty: r.counterparty,
+        account_id: r.account_id,
+        account_name: null
+      });
+    }
+
+    for (const r of currRows) {
+      unified.push({
+        kind: 'currency',
+        id: r.id,
+        trade_date: r.trade_date,
+        trade_type: r.trade_type,
+        market: r.market || 'Валютный рынок',
+        title: r.instrument,
+        subtitle: '',
+        quantity: r.quantity,
+        price: r.price,
+        currency: r.currency,
+        amount_kopecks: r.amount_kopecks,
+        trade_number: r.trade_number,
+        counterparty: r.counterparty,
+        account_id: r.account_id,
+        account_name: null
+      });
+    }
+
+    trState.allRows = unified;
+
+    // Заполняем фильтры
+    const types = [...new Set(unified.map(r => r.trade_type).filter(Boolean))].sort();
+    const typeSelect = document.getElementById('trFilterType');
+    if (typeSelect) {
+      typeSelect.innerHTML = '<option value="">Все</option>' +
+        types.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+    }
+
+    const markets = [...new Set(unified.map(r => r.market).filter(Boolean))].sort();
+    const marketSelect = document.getElementById('trFilterMarket');
+    if (marketSelect) {
+      marketSelect.innerHTML = '<option value="">Все</option>' +
+        markets.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+    }
+
+    const accounts = await window.db.select('SELECT id, code, display_name, name FROM accounts ORDER BY id');
+    const accSelect = document.getElementById('trFilterAccount');
+    if (accSelect) {
+      accSelect.innerHTML = '<option value="">Все</option>' +
+        accounts.map(a => {
+          const label = a.display_name || a.name || a.code;
+          return `<option value="${a.id}">${escapeHtml(label)}</option>`;
+        }).join('');
+    }
+
+    trState.loaded = true;
+    applyTradesFilters();
+
+  } catch (err) {
+    console.error('[trades] Ошибка инициализации:', err);
+    const el = document.getElementById('trList');
+    if (el) el.innerHTML = `<div class="import-error">Ошибка: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// Применение фильтров
+function applyTradesFilters() {
+  const f = trState.filters;
+  const tab = trState.activeTab;
+  let rows = trState.allRows.slice();
+
+  // Фильтр по вкладке
+  if (tab !== 'all') {
+    rows = rows.filter(r => r.kind === tab);
+  }
+
+  if (f.from) rows = rows.filter(r => r.trade_date >= f.from);
+  if (f.to) rows = rows.filter(r => r.trade_date <= f.to);
+  if (f.type) rows = rows.filter(r => r.trade_type === f.type);
+  if (f.market) rows = rows.filter(r => r.market === f.market);
+  if (f.account) rows = rows.filter(r => String(r.account_id) === f.account);
+  if (f.search) {
+    const q = f.search.toLowerCase();
+    rows = rows.filter(r =>
+      (r.title || '').toLowerCase().includes(q) ||
+      (r.subtitle || '').toLowerCase().includes(q) ||
+      (r.counterparty || '').toLowerCase().includes(q) ||
+      (r.trade_number || '').toLowerCase().includes(q)
+    );
+  }
+
+  // Сортировка
+  rows.sort((a, b) => {
+    const cmp = (a.trade_date || '').localeCompare(b.trade_date || '');
+    if (cmp !== 0) return f.order === 'asc' ? cmp : -cmp;
+    return f.order === 'asc' ? a.id - b.id : b.id - a.id;
+  });
+
+  trState.filteredRows = rows;
+  trState.renderedCount = 0;
+
+  // Статистика
+  let buy = 0, sell = 0;
+  for (const r of rows) {
+    const type = (r.trade_type || '').toLowerCase();
+    if (type.includes('покуп')) buy++;
+    else if (type.includes('продаж')) sell++;
+  }
+  document.getElementById('trCount').textContent = rows.length;
+  document.getElementById('trBuy').textContent = buy;
+  document.getElementById('trSell').textContent = sell;
+
+  renderTradesChunk();
+}
+
+// Рендеринг порции
+function renderTradesChunk() {
+  const listEl = document.getElementById('trList');
+  if (!listEl) return;
+
+  const chunk = trState.filteredRows.slice(trState.renderedCount, trState.renderedCount + 100);
+
+  if (trState.renderedCount === 0) {
+    if (trState.filteredRows.length === 0) {
+      listEl.innerHTML = '<div class="placeholder">Сделок по фильтру не найдено</div>';
+      document.getElementById('trLoadMore').style.display = 'none';
+      return;
+    }
+    listEl.innerHTML = '';
+  }
+
+  const html = chunk.map(t => {
+    // Иконка/метка типа
+    const kindLabel = {
+      securities: 'ЦБ',
+      futures: 'Производная',
+      currency: 'Валютная'
+    }[t.kind];
+
+    const marketLabel = t.market ? `<span class="op-market">${escapeHtml(t.market)}</span>` : '';
+    const accountLabel = t.account_name ? `<span class="op-account">${escapeHtml(t.account_name)}</span>` : '';
+    const typeColor = (t.trade_type || '').toLowerCase().includes('покуп')
+      ? 'positive'
+      : ((t.trade_type || '').toLowerCase().includes('продаж') ? 'negative' : '');
+
+    const qtyPrice = [
+      t.quantity != null ? `${formatNum(t.quantity, t.kind === 'currency' ? 2 : 0)} шт` : null,
+      t.price != null ? `× ${formatNum(t.price, 4)} ${t.currency || ''}` : null
+    ].filter(Boolean).join(' ');
+
+    let amountHtml = '';
+    if (t.amount_kopecks != null) {
+      amountHtml = `<div class="op-amount">${formatRub(t.amount_kopecks)}</div>`;
+    }
+
+    return `
+      <div class="op-row">
+        <div class="op-header">
+          <span class="op-date">${t.trade_date}</span>
+          ${marketLabel}
+          ${accountLabel}
+        </div>
+        <div class="op-body">
+          <div class="op-left">
+            <div class="op-type">
+              <span class="trade-kind-badge">${kindLabel}</span>
+              ${escapeHtml(t.trade_type || '—')} · ${escapeHtml(t.title)}
+            </div>
+            <div class="op-comment">${qtyPrice}${t.trade_number ? ` · № ${escapeHtml(t.trade_number)}` : ''}${t.counterparty ? ` · ${escapeHtml(t.counterparty)}` : ''}</div>
+          </div>
+          ${amountHtml}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  listEl.insertAdjacentHTML('beforeend', html);
+  trState.renderedCount += chunk.length;
+
+  const moreBtn = document.getElementById('trLoadMore');
+  if (moreBtn) {
+    moreBtn.style.display = trState.renderedCount < trState.filteredRows.length ? 'block' : 'none';
+    moreBtn.textContent = `Показать ещё ${Math.min(100, trState.filteredRows.length - trState.renderedCount)}`;
+  }
+}
+
 async function handleFile(file) {
   if (!file) return;
   setPreview('<div class="placeholder">Чтение файла...</div>');
@@ -3002,6 +3297,57 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const loadMoreBtn = document.getElementById('opLoadMore');
   if (loadMoreBtn) loadMoreBtn.addEventListener('click', renderOperationsChunk);
+
+  // ===== Обработчики экрана «Сделки» =====
+  const trFilters = [
+    { id: 'trFilterFrom', key: 'from' },
+    { id: 'trFilterTo', key: 'to' },
+    { id: 'trFilterType', key: 'type' },
+    { id: 'trFilterMarket', key: 'market' },
+    { id: 'trFilterAccount', key: 'account' },
+    { id: 'trFilterSearch', key: 'search' },
+    { id: 'trSortOrder', key: 'order' }
+  ];
+
+  trFilters.forEach(f => {
+    const el = document.getElementById(f.id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      trState.filters[f.key] = el.value;
+      applyTradesFilters();
+    });
+    el.addEventListener('change', () => {
+      trState.filters[f.key] = el.value;
+      applyTradesFilters();
+    });
+  });
+
+  // Переключатель вкладок
+  document.querySelectorAll('[data-trade-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-trade-tab]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      trState.activeTab = btn.dataset.tradeTab;
+      applyTradesFilters();
+    });
+  });
+
+  const trClearBtn = document.getElementById('trClearFilters');
+  if (trClearBtn) {
+    trClearBtn.addEventListener('click', () => {
+      Object.keys(trState.filters).forEach(k => {
+        trState.filters[k] = k === 'order' ? 'desc' : '';
+      });
+      trFilters.forEach(f => {
+        const el = document.getElementById(f.id);
+        if (el) el.value = f.key === 'order' ? 'desc' : '';
+      });
+      applyTradesFilters();
+    });
+  }
+
+  const trLoadMoreBtn = document.getElementById('trLoadMore');
+  if (trLoadMoreBtn) trLoadMoreBtn.addEventListener('click', renderTradesChunk);
 });
 
 window.addEventListener('popstate', () => {
