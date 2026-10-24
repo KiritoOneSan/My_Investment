@@ -3349,7 +3349,9 @@ function applyPortfolioFilters() {
   for (const p of filteredByLatest) {
     const type = p.security_type || '—';
     if (!byType[type]) continue;
-    const curr = p.currency || '—';
+    // Нормализуем RUR → RUB
+    let curr = p.currency || '—';
+    if (curr === 'RUR') curr = 'RUB';
     if (!byType[type][curr]) byType[type][curr] = [];
     byType[type][curr].push(p);
   }
@@ -3398,17 +3400,18 @@ function renderPortfoliosContent(byType, filters) {
   const cash = pfState.cashByCurrency;
   const cashItems = [];
   if (cash.RUB > 0) cashItems.push(`<div class="list-item"><span>RUB</span><span>${formatRubParts(cash.RUB)}</span></div>`);
-  if (cash.CNY > 0) cashItems.push(`<div class="list-item"><span>CNY</span><span>${formatNum(cash.CNY / 100, 2)}</span></div>`);
-  if (cash.USD > 0) cashItems.push(`<div class="list-item"><span>USD</span><span>${formatNum(cash.USD / 100, 2)}</span></div>`);
+  if (cash.CNY > 0) cashItems.push(`<div class="list-item"><span>CNY</span><span>${formatRubParts(cash.CNY)}</span></div>`);
+  if (cash.USD > 0) cashItems.push(`<div class="list-item"><span>USD</span><span>${formatRubParts(cash.USD)}</span></div>`);
 
   let html = '';
 
   // Блок «Деньги»
   if (cashItems.length > 0) {
+    const cashTotal = (cash.RUB || 0) + (cash.CNY || 0) + (cash.USD || 0);
     html += `<details class="pf-group" open>
       <summary class="pf-group-header">
         <span class="pf-group-title">Деньги${pfState.latestReportDate ? ' <span class="pf-date">на ' + pfState.latestReportDate + '</span>' : ''}</span>
-        <span class="pf-group-summary pf-group-summary-col">${formatRubParts(cash.RUB + cash.CNY + cash.USD)}</span>
+        <span class="pf-group-summary pf-group-summary-col">${formatRubParts(cashTotal)} RUB</span>
       </summary>
       <div class="list">${cashItems.join('')}</div>
     </details>`;
@@ -3441,7 +3444,7 @@ function renderPortfoliosContent(byType, filters) {
       totalCount += groupsByCurrency[curr].length;
     }
 
-    // Сводка построчно: сначала сумма, потом валюта
+    // Сводка построчно: сумма + валюта
     const summaryLines = [];
     if (totalsByCurrency['RUB']) {
       summaryLines.push(`${formatRubParts(totalsByCurrency['RUB'])} RUB`);
@@ -3449,10 +3452,10 @@ function renderPortfoliosContent(byType, filters) {
     for (const curr of currencies) {
       if (curr === 'RUB' || curr === '—') continue;
       if (totalsByCurrency[curr]) {
-        summaryLines.push(`${formatRubParts(totalsByCurrency[curr] / 100, 2)} ${curr}`);
+        summaryLines.push(`${formatRubParts(totalsByCurrency[curr])} ${curr}`);
       }
     }
-    if (summaryLines.length === 0) summaryLines.push(formatRubParts(totalKopecks));
+    if (summaryLines.length === 0) summaryLines.push(`${formatRubParts(totalKopecks)} RUB`);
 
     const summaryHtml = summaryLines.map(l => `<div>${l}</div>`).join('');
 
@@ -3472,11 +3475,12 @@ function renderPortfoliosContent(byType, filters) {
       for (const curr of currencies) {
         const items = groupsByCurrency[curr];
         const sum = totalsByCurrency[curr];
-        const currLabel = (curr === '—') ? 'Без валюты' : (curr === 'RUR' ? 'RUB' : curr);
-        const sumLabel = `${formatRubParts(sum)} ${currLabel}`;
+        // Заменяем RUR → RUB для отображения
+        const currDisplay = (curr === '—') ? 'Без валюты' : (curr === 'RUR' ? 'RUB' : curr);
+        const sumLabel = `${formatRubParts(sum)} ${currDisplay}`;
         html += `<details class="pf-subgroup">
           <summary class="pf-subgroup-header">
-            <span>${currLabel}</span>
+            <span>${currDisplay}</span>
             <span class="pf-subgroup-summary">${sumLabel}</span>
           </summary>
           <div class="list">${items.map(p => renderPfRow(p)).join('')}</div>
