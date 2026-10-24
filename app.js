@@ -3430,19 +3430,27 @@ function renderPortfoliosContent(byType, filters) {
       totalCount += groupsByCurrency[curr].length;
     }
 
-    // Сводка в заголовке: рубли + другие валюты, если есть
-    let summaryParts = [];
-    if (totalsByCurrency['RUB']) summaryParts.push(formatRub(totalsByCurrency['RUB']));
+    // Сводка в заголовке: построчно — RUB, USD, CNY и т.д.
+    const summaryLines = [];
+    if (totalsByCurrency['RUB']) {
+      summaryLines.push(`RUR ${formatRub(totalsByCurrency['RUB'])}`);
+    }
     for (const curr of currencies) {
       if (curr === 'RUB' || curr === '—') continue;
-      if (totalsByCurrency[curr]) summaryParts.push(`${curr} ${formatNum(totalsByCurrency[curr] / 100, 2)}`);
+      if (totalsByCurrency[curr]) {
+        summaryLines.push(`${curr} ${formatNum(totalsByCurrency[curr] / 100, 2)}`);
+      }
     }
-    if (summaryParts.length === 0) summaryParts.push(formatRub(totalKopecks));
+    if (summaryLines.length === 0) summaryLines.push(formatRub(totalKopecks));
+
+    const summaryHtml = summaryLines.map(l => `<div>${l}</div>`).join('');
 
     html += `<details class="pf-group">
       <summary class="pf-group-header">
-        <span class="pf-group-title">${typeLabels[type]} <span class="pf-count">${totalCount}</span></span>
-        <span class="pf-group-summary">${summaryParts.join(' + ')}</span>
+        <span class="pf-group-title">
+          ${typeLabels[type]}<br><span class="pf-count">${totalCount}</span>
+        </span>
+        <span class="pf-group-summary pf-group-summary-col">${summaryHtml}</span>
       </summary>
       <div class="pf-group-body">`;
 
@@ -3484,29 +3492,26 @@ function renderPfRow(p) {
   const price = p.price != null ? formatNum(p.price, 4) : '—';
   const sum = p.value_rub_kopecks != null ? formatRub(p.value_rub_kopecks) : '—';
 
-  const currencyMark = (p.currency && p.currency !== 'RUB') ? p.currency : '';
-
-  // Инфо: купон и дата погашения — отдельными строками
-  const infoLines = [];
-  if (p.coupon_rate != null && p.coupon_rate > 0) {
-    infoLines.push(`купон ${formatNum(p.coupon_rate, 2)}%`);
+  // Вторая строка под названием:
+  // - Для облигаций/еврооблигаций — купон
+  // - Для остальных — ISIN
+  let subtitle = '';
+  const isBond = (p.security_type === 'ОБЛИГАЦИЯ' || p.security_type === 'ЕВРООБЛИГАЦИЯ');
+  if (isBond) {
+    if (p.coupon_rate != null && p.coupon_rate > 0) {
+      subtitle = `купон ${formatNum(p.coupon_rate, 2)}%`;
+    } else {
+      subtitle = `купон — %`;
+    }
+  } else {
+    subtitle = escapeHtml(p.security_isin || '');
   }
-  if (p.payment_date) {
-    infoLines.push(`до ${p.payment_date}`);
-  }
-
-  const infoHtml = infoLines.length > 0
-    ? `<div class="pf-cell-info">
-         <div class="pf-col-label">Инфо</div>
-         <div class="pf-col-value pf-info-lines">${infoLines.map(l => `<div>${l}</div>`).join('')}</div>
-       </div>`
-    : '';
 
   return `
-    <div class="list-item pf-row${infoLines.length > 0 ? ' pf-row-with-info' : ''}">
+    <div class="list-item pf-row">
       <div class="pf-cell-name">
         <div class="pf-item-name">${escapeHtml(p.security_name || p.security_isin)}</div>
-        <div class="pf-item-meta">${escapeHtml(p.security_isin || '')}</div>
+        <div class="pf-item-meta">${subtitle}</div>
       </div>
       <div class="pf-cell-num">
         <div class="pf-col-label">Кол-во</div>
@@ -3514,13 +3519,12 @@ function renderPfRow(p) {
       </div>
       <div class="pf-cell-num">
         <div class="pf-col-label">Цена</div>
-        <div class="pf-col-value">${price}${currencyMark ? ' ' + currencyMark : ''}</div>
+        <div class="pf-col-value">${price}</div>
       </div>
       <div class="pf-cell-num pf-cell-sum">
         <div class="pf-col-label">Сумма</div>
         <div class="pf-col-value">${sum}</div>
       </div>
-      ${infoHtml}
     </div>
   `;
 }
