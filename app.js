@@ -150,6 +150,18 @@ function formatRub(kopecks) {
   return (rub < 0 ? '−' : '') + s;
 }
 
+// Форматирование рублей с пробелами и запятой — для заголовков групп
+function formatRubParts(kopecks) {
+  if (kopecks == null) return '0,00';
+  const rub = Math.abs(kopecks) / 100;
+  // Форматируем: 1234567.89 → "1 234 567,89"
+  const parts = rub.toFixed(2).split('.');
+  const intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  const fracPart = parts[1];
+  const sign = kopecks < 0 ? '−' : '';
+  return `${sign}${intPart},${fracPart}`;
+}
+
 function formatNum(n, digits = 2) {
   if (n == null) return '—';
   return n.toFixed(digits).replace('.', ',');
@@ -1688,7 +1700,7 @@ function buildCashBalancesPreviewHtml(bal) {
 
     return `
       <div class="import-row sub">
-        <span><b>${row.label}</b></span>
+        <span><b>${row.label === 'RUR' ? 'RUB' : row.label}</b></span>
         <span></span>
       </div>
       <div class="import-row sub">
@@ -3385,9 +3397,9 @@ function renderPortfoliosContent(byType, filters) {
 
   const cash = pfState.cashByCurrency;
   const cashItems = [];
-  if (cash.RUB > 0) cashItems.push(`<div class="list-item"><span>RUB</span><span>${formatRub(cash.RUB)}</span></div>`);
-  if (cash.CNY > 0) cashItems.push(`<div class="list-item"><span>CNY</span><span>${formatNum(cash.CNY / 100, 2)} CNY</span></div>`);
-  if (cash.USD > 0) cashItems.push(`<div class="list-item"><span>USD</span><span>${formatNum(cash.USD / 100, 2)} USD</span></div>`);
+  if (cash.RUB > 0) cashItems.push(`<div class="list-item"><span>RUB</span><span>${formatRubParts(cash.RUB)}</span></div>`);
+  if (cash.CNY > 0) cashItems.push(`<div class="list-item"><span>CNY</span><span>${formatNum(cash.CNY / 100, 2)}</span></div>`);
+  if (cash.USD > 0) cashItems.push(`<div class="list-item"><span>USD</span><span>${formatNum(cash.USD / 100, 2)}</span></div>`);
 
   let html = '';
 
@@ -3396,7 +3408,7 @@ function renderPortfoliosContent(byType, filters) {
     html += `<details class="pf-group" open>
       <summary class="pf-group-header">
         <span class="pf-group-title">Деньги${pfState.latestReportDate ? ' <span class="pf-date">на ' + pfState.latestReportDate + '</span>' : ''}</span>
-        <span class="pf-group-summary">${formatRub(cash.RUB + cash.CNY + cash.USD)}</span>
+        <span class="pf-group-summary pf-group-summary-col">${formatRubParts(cash.RUB + cash.CNY + cash.USD)}</span>
       </summary>
       <div class="list">${cashItems.join('')}</div>
     </details>`;
@@ -3416,7 +3428,6 @@ function renderPortfoliosContent(byType, filters) {
     if (!currencies.length) continue;
     hasPositions = true;
 
-    // Суммы по валютам и общая
     const totalsByCurrency = {};
     let totalKopecks = 0;
     let totalCount = 0;
@@ -3430,18 +3441,18 @@ function renderPortfoliosContent(byType, filters) {
       totalCount += groupsByCurrency[curr].length;
     }
 
-    // Сводка в заголовке: построчно — RUB, USD, CNY и т.д.
+    // Сводка построчно: сначала сумма, потом валюта
     const summaryLines = [];
     if (totalsByCurrency['RUB']) {
-      summaryLines.push(`RUR ${formatRub(totalsByCurrency['RUB'])}`);
+      summaryLines.push(`${formatRubParts(totalsByCurrency['RUB'])} RUB`);
     }
     for (const curr of currencies) {
       if (curr === 'RUB' || curr === '—') continue;
       if (totalsByCurrency[curr]) {
-        summaryLines.push(`${curr} ${formatNum(totalsByCurrency[curr] / 100, 2)}`);
+        summaryLines.push(`${formatRubParts(totalsByCurrency[curr] / 100, 2)} ${curr}`);
       }
     }
-    if (summaryLines.length === 0) summaryLines.push(formatRub(totalKopecks));
+    if (summaryLines.length === 0) summaryLines.push(formatRubParts(totalKopecks));
 
     const summaryHtml = summaryLines.map(l => `<div>${l}</div>`).join('');
 
@@ -3454,21 +3465,18 @@ function renderPortfoliosContent(byType, filters) {
       </summary>
       <div class="pf-group-body">`;
 
-    // Если только одна валюта — плоский список
     const visibleCurrencies = currencies.filter(c => c !== '—');
     if (visibleCurrencies.length <= 1 && !currencies.includes('—')) {
       html += `<div class="list">${groupsByCurrency[visibleCurrencies[0]].map(p => renderPfRow(p)).join('')}</div>`;
     } else {
-      // Иначе — по валютам
       for (const curr of currencies) {
         const items = groupsByCurrency[curr];
         const sum = totalsByCurrency[curr];
-        const sumLabel = curr === 'RUB'
-          ? formatRub(sum)
-          : `${curr} ${formatNum(sum / 100, 2)}`;
+        const currLabel = (curr === '—') ? 'Без валюты' : (curr === 'RUR' ? 'RUB' : curr);
+        const sumLabel = `${formatRubParts(sum)} ${currLabel}`;
         html += `<details class="pf-subgroup">
           <summary class="pf-subgroup-header">
-            <span>${curr === '—' ? 'Без валюты' : curr}</span>
+            <span>${currLabel}</span>
             <span class="pf-subgroup-summary">${sumLabel}</span>
           </summary>
           <div class="list">${items.map(p => renderPfRow(p)).join('')}</div>

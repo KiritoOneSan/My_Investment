@@ -1120,35 +1120,11 @@ h2 {
   font-weight: 600;
 }
 
-.pf-col-label {
-  font-size: 9px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  margin-bottom: 4px;
-  text-align: center;
-}
-
-.pf-col-value {
-  font-size: 12px;
-  font-weight: 500;
-  text-align: center;
-}
-
 /* Инфо — вертикальный список строк */
 
 /* На узких экранах — «Инфо» уходит на вторую строку */
 
 /* Строка позиции — табличный вид */
-.pf-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 70px 100px 110px;
-  gap: 10px;
-  align-items: start;
-  padding: 12px 14px;
-  font-size: 13px;
-  border-bottom: 1px solid var(--border);
-}
 
 .pf-row:last-child {
   border-bottom: none;
@@ -1174,29 +1150,8 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.pf-col-label {
-  font-size: 9px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  margin-bottom: 4px;
-  text-align: right;
-}
-
-.pf-col-value {
-  font-size: 12px;
-  font-weight: 500;
-  text-align: right;
-  white-space: nowrap;
-}
-
 .pf-cell-sum .pf-col-value {
   font-weight: 600;
-}
-
-.pf-cell-num {
-  text-align: right;
-  white-space: nowrap;
 }
 
 /* ===== Заголовок группы: две колонки ===== */
@@ -1285,7 +1240,68 @@ h2 {
   white-space: nowrap;
 }
 
-/* ===== Мобильная раскладка ===== */
+/* Строка позиции — табличный вид */
+.pf-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 80px 110px 120px;
+  gap: 10px;
+  align-items: start;
+  padding: 12px 14px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pf-row:last-child {
+  border-bottom: none;
+}
+
+.pf-cell-name {
+  min-width: 0;
+  padding-right: 8px;
+}
+
+.pf-item-name {
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.pf-item-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+/* Заголовки и значения — по центру */
+.pf-col-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 4px;
+  text-align: center;
+}
+
+.pf-col-value {
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.pf-cell-sum .pf-col-value {
+  font-weight: 600;
+}
+
+.pf-cell-num {
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Мобильная раскладка */
 @media (max-width: 520px) {
   .pf-row {
     grid-template-columns: minmax(0, 1fr) 50px 80px 90px;
@@ -1306,18 +1322,6 @@ h2 {
   }
 
   .pf-col-value {
-    font-size: 11px;
-  }
-
-  .pf-group-header {
-    padding: 12px 12px;
-  }
-
-  .pf-group-title {
-    font-size: 13px;
-  }
-
-  .pf-group-summary-col {
     font-size: 11px;
   }
 }
