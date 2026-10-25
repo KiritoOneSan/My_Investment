@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'">
   <meta name="theme-color" content="#0d6e4f">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=44">
+  <link rel="stylesheet" href="style.css?v=45">
   <title>Инвестиции</title>
 </head>
 <body>
@@ -59,7 +59,31 @@
 
     <!-- Сводка -->
     <section id="screen-summary" class="screen active">
-      <div class="card big-value" id="smMainCard">
+      <details class="filter-collapsible" id="smFiltersDetails">
+        <summary class="filter-collapsible-header">
+          <span>Фильтры</span>
+          <span class="filter-active-count" id="smFilterCount"></span>
+        </summary>
+        <div class="filter-collapsible-body">
+          <div class="filter-row">
+            <label>Период с</label>
+            <input type="date" id="smFilterFrom" class="filter-input">
+          </div>
+          <div class="filter-row">
+            <label>по</label>
+            <input type="date" id="smFilterTo" class="filter-input">
+          </div>
+          <div class="filter-row">
+            <label>Счёт</label>
+            <select id="smFilterAccount" class="filter-input">
+              <option value="">Все</option>
+            </select>
+          </div>
+          <button class="small-btn" id="smClearFilters" style="margin-top: 8px;">Сбросить фильтры</button>
+        </div>
+      </details>
+
+      <div class="card big-value">
         <div class="label">Стоимость портфеля</div>
         <div class="value" id="smTotalValue">—</div>
         <div class="change" id="smChange">—</div>
@@ -84,11 +108,11 @@
       <div class="tiles-grid">
         <div class="tile">
           <div class="tile-label">Купоны</div>
-          <div class="tile-value" id="smCoupons">—</div>
+          <div class="tile-value positive" id="smCoupons">—</div>
         </div>
         <div class="tile">
           <div class="tile-label">Дивиденды</div>
-          <div class="tile-value" id="smDividends">—</div>
+          <div class="tile-value positive" id="smDividends">—</div>
         </div>
         <div class="tile">
           <div class="tile-label">P&L реализованный</div>
@@ -96,12 +120,20 @@
         </div>
         <div class="tile">
           <div class="tile-label">Издержки</div>
-          <div class="tile-value" id="smExpenses">—</div>
+          <div class="tile-value negative" id="smExpenses">—</div>
         </div>
       </div>
 
+      <h2>Итоги за период</h2>
+      <div class="card">
+        <div class="import-row"><span>Суммарный доход</span><span id="smIncomeTotal" class="positive">—</span></div>
+        <div class="import-row"><span>Суммарные издержки</span><span id="smExpenseTotal" class="negative">—</span></div>
+        <div class="import-row"><span>Налог (НДФЛ)</span><span id="smTaxTotal" class="negative">—</span></div>
+        <div class="import-row"><span>Чистый результат</span><span id="smNetTotal">—</span></div>
+      </div>
+
       <h2>Выплаты в текущем месяце</h2>
-      <div class="card" id="smPaymentsCard">
+      <div class="card">
         <div class="payments-row">
           <span>Фиксированные</span>
           <span id="smPaymentsFixed">—</span>
@@ -397,7 +429,7 @@
   </nav>
 
   <script src="lib/xlsx.full.min.js"></script>
-  <script src="db.js?v=44"></script>
-  <script src="app.js?v=44"></script>
+  <script src="db.js?v=45"></script>
+  <script src="app.js?v=45"></script>
 </body>
 </html>

@@ -3699,142 +3699,225 @@ function renderPfRow(p) {
 // ============================================================
 // ===== Этап 4.4: Экран «Сводка» ============================
 // ============================================================
+
 const smState = {
-  loaded: false
+  loaded: false,
+  filters: {
+    from: '',
+    to: '',
+    account: ''
+  }
 };
 
 async function initSummaryScreen() {
   if (!window.db || !window.db.ready) return;
 
   try {
-    // 1. Итоговые снимки по каждому счёту
-    const snapshots = await window.db.select(
-      `SELECT ps.*,
-              a.code AS account_code, a.display_name AS account_name
-       FROM portfolio_snapshots ps
-       LEFT JOIN accounts a ON a.id = ps.account_id
-       INNER JOIN (
-         SELECT account_id, MAX(snapshot_date) AS max_date
-         FROM portfolio_snapshots
-         GROUP BY account_id
-       ) latest ON latest.account_id = ps.account_id AND latest.max_date = ps.snapshot_date
-       ORDER BY ps.snapshot_date DESC`
+    // Заполняем фильтр по счетам
+    pfState.accounts = await window.db.select(
+      'SELECT id, code, display_name, name FROM accounts ORDER BY id'
     );
-
-    // Сумма по всем счетам
-    let totalValue = 0, totalCashRub = 0, totalCashCny = 0, totalCashUsd = 0;
-    let latestDate = null;
-    for (const s of snapshots) {
-      if (s.total_with_cash_kopecks != null) totalValue += s.total_with_cash_kopecks;
-      if (s.cash_rub_kopecks != null) totalCashRub += s.cash_rub_kopecks;
-      if (s.cash_cny_kopecks != null) totalCashCny += s.cash_cny_kopecks;
-      if (s.cash_usd_kopecks != null) totalCashUsd += s.cash_usd_kopecks;
-      if (!latestDate || s.snapshot_date > latestDate) latestDate = s.snapshot_date;
+    const accSelect = document.getElementById('smFilterAccount');
+    if (accSelect) {
+      accSelect.innerHTML = '<option value="">Все</option>' +
+        pfState.accounts.map(a => {
+          const label = a.display_name || a.name || a.code;
+          return `<option value="${a.id}">${escapeHtml(label)}</option>`;
+        }).join('');
     }
 
+    // По умолчанию — текущий год
+    if (!smState.filters.from && !smState.filters.to) {
+      const today = new Date();
+      const year = today.getFullYear();
+      smState.filters.from = `${year}-01-01`;
+      smState.filters.to = `${year}-12-31`;
+      const fromEl = document.getElementById('smFilterFrom');
+      const toEl = document.getElementById('smFilterTo');
+      if (fromEl) fromEl.value = smState.filters.from;
+      if (toEl) toEl.value = smState.filters.to;
+    }
+
+    smState.loaded = true;
+    refreshSummary();
+
+  } catch (err) {
+    console.error('[summary] Ошибка:', err);
+  }
+}
+
+async function refreshSummary() {
+  if (!window.db || !window.db.ready) return;
+
+  const f = smState.filters;
+
+  // Счётчик активных фильтров
+  const activeCount = ['from', 'to', 'account'].filter(k => f[k] !== '').length;
+  const countEl = document.getElementById('smFilterCount');
+  if (countEl) countEl.textContent = activeCount > 0 ? `· ${activeCount}` : '';
+
+  try {
+    // ===== 1. Стоимость портфеля и валюта =====
+    // Берём последние позиции (те же, что на «Портфелях»)
+    const latestPerAccount = await window.db.select(
+      `SELECT account_id, MAX(snapshot_date) AS max_date
+       FROM positions
+       GROUP BY account_id`
+    );
+
+    let latestPositions = [];
+    let latestDate = null;
+
+    for (const la of latestPerAccount) {
+      const rows = await window.db.select(
+        `SELECT * FROM positions
+         WHERE account_id = ? AND snapshot_date = ?`,
+        [la.account_id, la.max_date]
+      );
+      // Если фильтр по счёту — оставляем только этот счёт
+      if (f.account && String(la.account_id) !== f.account) continue;
+      latestPositions = latestPositions.concat(rows);
+      if (!latestDate || la.max_date > latestDate) latestDate = la.max_date;
+    }
+
+    let secValue = 0;
+    for (const p of latestPositions) {
+      if (p.value_rub_kopecks != null) secValue += p.value_rub_kopecks;
+    }
+
+    // Деньги
+    const latestReports = await window.db.select(
+      `SELECT rs.*
+       FROM report_snapshots rs
+       INNER JOIN (
+         SELECT account_id, MAX(snapshot_date) AS max_date
+         FROM report_snapshots
+         GROUP BY account_id
+       ) latest ON latest.account_id = rs.account_id AND latest.max_date = rs.snapshot_date`
+    );
+
+    let cashRub = 0, cashCny = 0, cashUsd = 0;
+    let latestReportDate = null;
+    for (const r of latestReports) {
+      if (f.account && String(r.account_id) !== f.account) continue;
+      if (r.cash_rub_kopecks != null) cashRub += r.cash_rub_kopecks;
+      if (r.cash_cny_kopecks != null) cashCny += r.cash_cny_kopecks;
+      if (r.cash_usd_kopecks != null) cashUsd += r.cash_usd_kopecks;
+      if (!latestReportDate || r.snapshot_date > latestReportDate) latestReportDate = r.snapshot_date;
+    }
+
+    const totalValue = secValue + cashRub + cashCny + cashUsd;
     document.getElementById('smTotalValue').textContent = formatRubParts(totalValue) + ' RUB';
 
-    // 2. Изменение: сравниваем с предыдущим снимком
-    // Ищем все снимки, берём самый старый и самый новый по дате
-    const allSnapshotDates = await window.db.select(
-      `SELECT DISTINCT snapshot_date FROM portfolio_snapshots ORDER BY snapshot_date DESC LIMIT 2`
+    // Изменение за период — от начала периода к концу
+    // Сравниваем снимки, попадающие в фильтр
+    const snapshotDates = await window.db.select(
+      `SELECT DISTINCT snapshot_date
+       FROM portfolio_snapshots
+       WHERE snapshot_date >= ? AND snapshot_date <= ?
+       ORDER BY snapshot_date ASC`,
+      [f.from || '1900-01-01', f.to || '2999-12-31']
     );
 
     const changeEl = document.getElementById('smChange');
-
-    if (allSnapshotDates.length >= 2) {
-      const latest = allSnapshotDates[0].snapshot_date;
-      const prev = allSnapshotDates[1].snapshot_date;
+    if (snapshotDates.length >= 2) {
+      const first = snapshotDates[0].snapshot_date;
+      const last = snapshotDates[snapshotDates.length - 1].snapshot_date;
 
       const sumForDate = async (date) => {
+        let where = 'WHERE snapshot_date = ?';
+        const params = [date];
+        if (f.account) {
+          where += ' AND account_id = ?';
+          params.push(Number(f.account));
+        }
         const rows = await window.db.select(
-          'SELECT total_with_cash_kopecks FROM portfolio_snapshots WHERE snapshot_date = ?',
-          [date]
+          `SELECT total_with_cash_kopecks FROM portfolio_snapshots ${where}`,
+          params
         );
         let sum = 0;
         for (const r of rows) if (r.total_with_cash_kopecks != null) sum += r.total_with_cash_kopecks;
         return sum;
       };
 
-      const latestSum = await sumForDate(latest);
-      const prevSum = await sumForDate(prev);
-
-      const diff = latestSum - prevSum;
-      const diffPct = prevSum > 0 ? (diff / prevSum * 100) : 0;
+      const firstSum = await sumForDate(first);
+      const lastSum = await sumForDate(last);
+      const diff = lastSum - firstSum;
+      const pct = firstSum > 0 ? (diff / firstSum * 100) : 0;
 
       if (diff === 0) {
-        changeEl.textContent = `Изменение за период: без изменений`;
+        changeEl.textContent = `Без изменений за период`;
         changeEl.className = 'change';
       } else {
         const sign = diff > 0 ? '+' : '';
-        const pctSign = diffPct > 0 ? '+' : '';
-        changeEl.textContent = `Изменение за период: ${sign}${formatRubParts(diff)} RUB (${pctSign}${diffPct.toFixed(2)}%)`;
+        const pctSign = pct > 0 ? '+' : '';
+        changeEl.textContent = `Изменение: ${sign}${formatRubParts(diff)} RUB (${pctSign}${pct.toFixed(2)}%)`;
         changeEl.className = 'change ' + (diff > 0 ? 'positive' : 'negative');
       }
     } else {
-      changeEl.textContent = `Изменение за период: данных пока нет (один снимок)`;
+      changeEl.textContent = 'Для расчёта изменения нужны минимум два отчёта';
       changeEl.className = 'change';
     }
 
-    // 3. Три колонки по валютам
-    document.getElementById('smCurrencyRUB').textContent = formatRubParts(totalCashRub);
-    document.getElementById('smCurrencyCNY').textContent = formatRubParts(totalCashCny);
-    document.getElementById('smCurrencyUSD').textContent = formatRubParts(totalCashUsd);
+    // 3 колонки по валютам
+    document.getElementById('smCurrencyRUB').textContent = formatRubParts(cashRub);
+    document.getElementById('smCurrencyCNY').textContent = formatRubParts(cashCny);
+    document.getElementById('smCurrencyUSD').textContent = formatRubParts(cashUsd);
 
-    // 4. Доходы за период: берём период между двумя последними датами отчётов
-    // Если только одна дата — берём её как точку, а период — весь диапазон отчёта.
-    // Проще: считаем всё за весь период отчётов. Позже уточним.
-    let periodFrom = null, periodTo = null;
-    if (allSnapshotDates.length > 0) {
-      periodTo = allSnapshotDates[0].snapshot_date;
-      periodFrom = allSnapshotDates.length >= 2
-        ? allSnapshotDates[allSnapshotDates.length - 1].snapshot_date
-        : allSnapshotDates[0].snapshot_date;
+    // ===== 2. Доходы за период =====
+    // Период берём из фильтра. Если пустой — за всё время
+    const periodFrom = f.from || '1900-01-01';
+    const periodTo = f.to || '2999-12-31';
+
+    const titleEl = document.getElementById('smPeriodTitle');
+    if (f.from && f.to) titleEl.textContent = `Доходы с ${f.from} по ${f.to}`;
+    else if (f.from) titleEl.textContent = `Доходы с ${f.from}`;
+    else if (f.to) titleEl.textContent = `Доходы по ${f.to}`;
+    else titleEl.textContent = 'Доходы за всё время';
+
+    let sqlWhere = 'WHERE operation_date >= ? AND operation_date <= ?';
+    const sqlParams = [periodFrom, periodTo];
+    if (f.account) {
+      sqlWhere += ' AND account_id = ?';
+      sqlParams.push(Number(f.account));
     }
 
-    // Меняем заголовок блока доходов
-    const periodTitleEl = document.getElementById('smPeriodTitle');
-    if (periodFrom && periodTo) {
-      if (periodFrom === periodTo) {
-        periodTitleEl.textContent = `Доходы за период (${periodTo})`;
-      } else {
-        periodTitleEl.textContent = `Доходы с ${periodFrom} по ${periodTo}`;
-      }
-    }
-
-    // Считаем купоны, дивиденды, издержки из cash_operations за период
     const ops = await window.db.select(
-      `SELECT operation_type, amount_kopecks
-       FROM cash_operations
-       WHERE operation_date >= ? AND operation_date <= ?`,
-      [periodFrom || '1900-01-01', periodTo || '2999-12-31']
+      `SELECT operation_type, amount_kopecks FROM cash_operations ${sqlWhere}`,
+      sqlParams
     );
 
-    let coupons = 0, dividends = 0, expenses = 0;
+    let coupons = 0, dividends = 0, expenses = 0, tax = 0;
     for (const op of ops) {
       const type = (op.operation_type || '').toLowerCase();
-      if (type.includes('купон')) coupons += op.amount_kopecks || 0;
-      else if (type.includes('дивиденд')) dividends += op.amount_kopecks || 0;
-      else if (type.includes('вознагражд') || type.includes('комисс')) expenses += op.amount_kopecks || 0;
+      const amount = op.amount_kopecks || 0;
+      if (type.includes('купон')) coupons += amount;
+      else if (type.includes('дивиденд')) dividends += amount;
+      else if (type.includes('вознагражд') || type.includes('комисс')) expenses += amount;
+      else if (type.includes('ндфл') || type.includes('налог')) tax += amount;
     }
 
     document.getElementById('smCoupons').textContent = formatRubParts(coupons) + ' RUB';
     document.getElementById('smDividends').textContent = formatRubParts(dividends) + ' RUB';
     document.getElementById('smExpenses').textContent = formatRubParts(expenses) + ' RUB';
-
-    // P&L — заглушка
     document.getElementById('smPnL').textContent = '— (нужен FIFO)';
 
-    // 5. Календарь выплат — пока заглушка, скрываем
+    // Итоги
+    const incomeTotal = coupons + dividends; // + P&L позже
+    const netTotal = incomeTotal + expenses + tax; // издержки и налог отрицательные
+
+    document.getElementById('smIncomeTotal').textContent = formatRubParts(incomeTotal) + ' RUB';
+    document.getElementById('smExpenseTotal').textContent = formatRubParts(expenses) + ' RUB';
+    document.getElementById('smTaxTotal').textContent = formatRubParts(tax) + ' RUB';
+    const netEl = document.getElementById('smNetTotal');
+    netEl.textContent = formatRubParts(netTotal) + ' RUB';
+    netEl.className = netTotal >= 0 ? 'positive' : 'negative';
+
+    // ===== 3. Календарь =====
     document.getElementById('smPaymentsFixed').textContent = '—';
     document.getElementById('smPaymentsFloating').textContent = '—';
 
-    // 6. Уведомление «По N позициям нет данных о покупке»
-    // Пока FIFO нет — считаем, что у нас 0 лотов, показывать не будем.
-    // Раскомментируем и настроим, когда сделаем lots.
     document.getElementById('smWarning').style.display = 'none';
-
-    smState.loaded = true;
 
   } catch (err) {
     console.error('[summary] Ошибка:', err);
@@ -4120,6 +4203,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+// тут
+
   const pfClearBtn = document.getElementById('pfClearFilters');
   if (pfClearBtn) {
     pfClearBtn.addEventListener('click', () => {
@@ -4131,7 +4216,42 @@ document.addEventListener('DOMContentLoaded', () => {
       applyPortfolioFilters();
     });
   }
-  
+
+  // ===== Обработчики фильтров экрана «Сводка» =====
+  const smFilterFrom = document.getElementById('smFilterFrom');
+  if (smFilterFrom) {
+    smFilterFrom.addEventListener('change', () => {
+      smState.filters.from = smFilterFrom.value;
+      refreshSummary();
+    });
+  }
+
+  const smFilterTo = document.getElementById('smFilterTo');
+  if (smFilterTo) {
+    smFilterTo.addEventListener('change', () => {
+      smState.filters.to = smFilterTo.value;
+      refreshSummary();
+    });
+  }
+
+  const smFilterAccount = document.getElementById('smFilterAccount');
+  if (smFilterAccount) {
+    smFilterAccount.addEventListener('change', () => {
+      smState.filters.account = smFilterAccount.value;
+      refreshSummary();
+    });
+  }
+
+  const smClearBtn = document.getElementById('smClearFilters');
+  if (smClearBtn) {
+    smClearBtn.addEventListener('click', () => {
+      smState.filters = { from: '', to: '', account: '' };
+      if (smFilterFrom) smFilterFrom.value = '';
+      if (smFilterTo) smFilterTo.value = '';
+      if (smFilterAccount) smFilterAccount.value = '';
+      refreshSummary();
+    });
+  }
 });
 
 window.addEventListener('popstate', () => {
