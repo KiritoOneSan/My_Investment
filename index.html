@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'">
   <meta name="theme-color" content="#0d6e4f">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=43">
+  <link rel="stylesheet" href="style.css?v=44">
   <title>Инвестиции</title>
 </head>
 <body>
@@ -59,29 +59,61 @@
 
     <!-- Сводка -->
     <section id="screen-summary" class="screen active">
-      <div class="card big-value">
+      <div class="card big-value" id="smMainCard">
         <div class="label">Стоимость портфеля</div>
-        <div class="value">1 030 450,17 ₽</div>
-        <div class="change positive">+12 345,67 ₽ (+1,21%)</div>
+        <div class="value" id="smTotalValue">—</div>
+        <div class="change" id="smChange">—</div>
       </div>
+
       <div class="currency-grid">
-        <div class="currency-cell"><div class="currency-label">RUB</div><div class="currency-value">951 437,56</div></div>
-        <div class="currency-cell"><div class="currency-label">CNY</div><div class="currency-value">515,82</div></div>
-        <div class="currency-cell"><div class="currency-label">USD</div><div class="currency-value">202,79</div></div>
+        <div class="currency-cell">
+          <div class="currency-label">RUB</div>
+          <div class="currency-value" id="smCurrencyRUB">—</div>
+        </div>
+        <div class="currency-cell">
+          <div class="currency-label">CNY</div>
+          <div class="currency-value" id="smCurrencyCNY">—</div>
+        </div>
+        <div class="currency-cell">
+          <div class="currency-label">USD</div>
+          <div class="currency-value" id="smCurrencyUSD">—</div>
+        </div>
       </div>
-      <h2>Доходы за месяц</h2>
+
+      <h2 id="smPeriodTitle">Доходы за период</h2>
       <div class="tiles-grid">
-        <div class="tile"><div class="tile-label">Купоны</div><div class="tile-value">11 223,48 ₽</div></div>
-        <div class="tile"><div class="tile-label">Дивиденды</div><div class="tile-value">2 517,09 ₽</div></div>
-        <div class="tile"><div class="tile-label">P&L</div><div class="tile-value positive">+5 234 ₽</div></div>
-        <div class="tile"><div class="tile-label">Издержки</div><div class="tile-value negative">−49,21 ₽</div></div>
+        <div class="tile">
+          <div class="tile-label">Купоны</div>
+          <div class="tile-value" id="smCoupons">—</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Дивиденды</div>
+          <div class="tile-value" id="smDividends">—</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">P&L реализованный</div>
+          <div class="tile-value" id="smPnL">—</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Издержки</div>
+          <div class="tile-value" id="smExpenses">—</div>
+        </div>
       </div>
-      <h2>Выплаты в этом месяце</h2>
-      <div class="card">
-        <div class="payments-row"><span>Фиксированные</span><span>24 шт · 12 345 ₽</span></div>
-        <div class="payments-row"><span>Плавающие</span><span>5 шт · —</span></div>
+
+      <h2>Выплаты в текущем месяце</h2>
+      <div class="card" id="smPaymentsCard">
+        <div class="payments-row">
+          <span>Фиксированные</span>
+          <span id="smPaymentsFixed">—</span>
+        </div>
+        <div class="payments-row">
+          <span>Плавающие</span>
+          <span id="smPaymentsFloating">—</span>
+        </div>
+        <div class="import-note" style="margin-top: 8px;">Календарь выплат будет добавлен позже — после реализации таблицы payments.</div>
       </div>
-      <div class="notice">По 3 позициям нет данных о покупке</div>
+
+      <div class="notice" id="smWarning" style="display: none;"></div>
     </section>
 
 	<!-- Портфели -->
@@ -365,7 +397,7 @@
   </nav>
 
   <script src="lib/xlsx.full.min.js"></script>
-  <script src="db.js?v=43"></script>
-  <script src="app.js?v=43"></script>
+  <script src="db.js?v=44"></script>
+  <script src="app.js?v=44"></script>
 </body>
 </html>
