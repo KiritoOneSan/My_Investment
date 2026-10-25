@@ -3302,6 +3302,7 @@ async function initPortfoliosScreen() {
 
 function applyPortfolioFilters() {
   const f = pfState.filters;
+  const mode = pfState.mode;
 
   // Счётчик активных фильтров
   const activeCount = ['from', 'to', 'account'].filter(k => f[k] !== '').length;
@@ -3314,11 +3315,9 @@ function applyPortfolioFilters() {
   if (f.to) positions = positions.filter(p => p.snapshot_date <= f.to);
   if (f.account) positions = positions.filter(p => String(p.account_id) === f.account);
 
-  // Если есть фильтр по периоду — берём последнюю дату в диапазоне
-  // Если нет — берём последнюю дату по каждому счёту
+  // Определяем «последние» позиции
   let filteredByLatest = [];
   if (f.from || f.to) {
-    // Определяем максимальную дату в отфильтрованном наборе
     let maxDate = null;
     for (const p of positions) {
       if (!maxDate || p.snapshot_date > maxDate) maxDate = p.snapshot_date;
@@ -3327,7 +3326,6 @@ function applyPortfolioFilters() {
       filteredByLatest = positions.filter(p => p.snapshot_date === maxDate);
     }
   } else {
-    // Иначе — последняя дата по каждому счёту
     const latestByAccount = {};
     for (const p of positions) {
       const key = p.account_id;
@@ -3338,7 +3336,48 @@ function applyPortfolioFilters() {
     filteredByLatest = positions.filter(p => p.snapshot_date === latestByAccount[p.account_id]);
   }
 
-  // Группируем по типу, потом по валюте
+  // ===== РЕЖИМ «СВОДНО» =====
+  if (mode === 'combined') {
+    const byType = groupPositionsByTypeAndCurrency(filteredByLatest, f.order);
+    const totals = calculatePortfolioTotals(byType);
+    renderPortfolioStats(totals);
+    renderPortfoliosContent(byType, f);
+    return;
+  }
+
+  // ===== РЕЖИМ «ПО СЧЕТАМ» =====
+  if (mode === 'by-account') {
+    // Группируем позиции по account_id
+    const byAccount = {};
+    for (const p of filteredByLatest) {
+      if (!byAccount[p.account_id]) byAccount[p.account_id] = [];
+      byAccount[p.account_id].push(p);
+    }
+
+    // Общие итоги для карточки статистики
+    let totalSec = 0;
+    for (const accId of Object.keys(byAccount)) {
+      for (const p of byAccount[accId]) {
+        if (p.value_rub_kopecks != null) totalSec += p.value_rub_kopecks;
+      }
+    }
+
+    const cashRub = pfState.cashByCurrency.RUB || 0;
+    const cashCny = pfState.cashByCurrency.CNY || 0;
+    const cashUsd = pfState.cashByCurrency.USD || 0;
+    const cashTotal = cashRub + cashCny + cashUsd;
+
+    document.getElementById('pfSecValue').textContent = formatRubParts(totalSec) + ' RUB';
+    document.getElementById('pfCashValue').textContent = formatRubParts(cashTotal) + ' RUB';
+    document.getElementById('pfTotalValue').textContent = formatRubParts(totalSec + cashTotal) + ' RUB';
+
+    renderPortfoliosByAccount(byAccount, f);
+    return;
+  }
+}
+
+// Группировка позиций по типу и валюте
+function groupPositionsByTypeAndCurrency(positions, order) {
   const byType = {
     'АКЦИЯ': {},
     'ОБЛИГАЦИЯ': {},
@@ -3346,31 +3385,33 @@ function applyPortfolioFilters() {
     'ПАЙ': {}
   };
 
-  for (const p of filteredByLatest) {
+  for (const p of positions) {
     const type = p.security_type || '—';
     if (!byType[type]) continue;
-    // Нормализуем RUR → RUB
     let curr = p.currency || '—';
     if (curr === 'RUR') curr = 'RUB';
     if (!byType[type][curr]) byType[type][curr] = [];
     byType[type][curr].push(p);
   }
 
-  // Сортируем внутри каждой валютной подгруппы
   for (const type of Object.keys(byType)) {
     for (const curr of Object.keys(byType[type])) {
       byType[type][curr].sort((a, b) => {
-        if (f.order === 'alpha') return (a.security_name || '').localeCompare(b.security_name || '');
+        if (order === 'alpha') return (a.security_name || '').localeCompare(b.security_name || '');
         const av = a.value_rub_kopecks || 0;
         const bv = b.value_rub_kopecks || 0;
-        if (f.order === 'value_desc') return bv - av;
-        if (f.order === 'value_asc') return av - bv;
+        if (order === 'value_desc') return bv - av;
+        if (order === 'value_asc') return av - bv;
         return 0;
       });
     }
   }
 
-  // Считаем итоги
+  return byType;
+}
+
+// Расчёт итогов
+function calculatePortfolioTotals(byType) {
   let secValue = 0;
   for (const type of Object.keys(byType)) {
     for (const curr of Object.keys(byType[type])) {
@@ -3379,18 +3420,129 @@ function applyPortfolioFilters() {
       }
     }
   }
-
   const cashRub = pfState.cashByCurrency.RUB || 0;
   const cashCny = pfState.cashByCurrency.CNY || 0;
   const cashUsd = pfState.cashByCurrency.USD || 0;
   const cashTotal = cashRub + cashCny + cashUsd;
-  const total = secValue + cashTotal;
+  return {
+    secValue,
+    cashTotal,
+    total: secValue + cashTotal
+  };
+}
 
-  document.getElementById('pfSecValue').textContent = formatRub(secValue);
-  document.getElementById('pfCashValue').textContent = formatRub(cashTotal);
-  document.getElementById('pfTotalValue').textContent = formatRub(total);
+// Отрисовка карточки статистики
+function renderPortfolioStats(totals) {
+  document.getElementById('pfSecValue').textContent = formatRubParts(totals.secValue) + ' RUB';
+  document.getElementById('pfCashValue').textContent = formatRubParts(totals.cashTotal) + ' RUB';
+  document.getElementById('pfTotalValue').textContent = formatRubParts(totals.total) + ' RUB';
+}
 
-  renderPortfoliosContent(byType, f);
+// Отрисовка режима «По счетам»
+function renderPortfoliosByAccount(byAccount, filters) {
+  const el = document.getElementById('pfContent');
+  if (!el) return;
+
+  const accIds = Object.keys(byAccount).sort((a, b) => Number(a) - Number(b));
+  if (accIds.length === 0) {
+    el.innerHTML = '<div class="placeholder">Нет данных по счетам. Загрузите отчёт во вкладке «Импорт».</div>';
+    return;
+  }
+
+  let html = '';
+
+  for (const accId of accIds) {
+    const positions = byAccount[accId];
+    const acc = pfState.accounts.find(a => String(a.id) === String(accId));
+    const accLabel = acc ? (acc.display_name || acc.name || acc.code) : `Счёт ${accId}`;
+
+    // Итог по счёту
+    let accTotal = 0;
+    for (const p of positions) {
+      if (p.value_rub_kopecks != null) accTotal += p.value_rub_kopecks;
+    }
+
+    // Группируем по типам
+    const byType = groupPositionsByTypeAndCurrency(positions, filters.order);
+
+    html += `<details class="pf-group">
+      <summary class="pf-group-header">
+        <span class="pf-group-title">
+          ${escapeHtml(accLabel)}<br>
+          <span class="pf-count">${positions.length}</span>
+        </span>
+        <span class="pf-group-summary pf-group-summary-col">${formatRubParts(accTotal)} RUB</span>
+      </summary>
+      <div class="pf-group-body">`;
+
+    const typeLabels = {
+      'АКЦИЯ': 'Акции',
+      'ОБЛИГАЦИЯ': 'Облигации',
+      'ЕВРООБЛИГАЦИЯ': 'Еврооблигации',
+      'ПАЙ': 'Паи'
+    };
+
+    for (const type of ['АКЦИЯ', 'ОБЛИГАЦИЯ', 'ЕВРООБЛИГАЦИЯ', 'ПАЙ']) {
+      const groupsByCurrency = byType[type];
+      const currencies = Object.keys(groupsByCurrency);
+      if (!currencies.length) continue;
+
+      const totalsByCurrency = {};
+      let totalKopecks = 0;
+      let totalCount = 0;
+      for (const curr of currencies) {
+        let sum = 0;
+        for (const p of groupsByCurrency[curr]) {
+          if (p.value_rub_kopecks != null) sum += p.value_rub_kopecks;
+        }
+        totalsByCurrency[curr] = sum;
+        totalKopecks += sum;
+        totalCount += groupsByCurrency[curr].length;
+      }
+
+      const summaryLines = [];
+      if (totalsByCurrency['RUB']) summaryLines.push(`${formatRubParts(totalsByCurrency['RUB'])} RUB`);
+      for (const curr of currencies) {
+        if (curr === 'RUB' || curr === '—') continue;
+        if (totalsByCurrency[curr]) summaryLines.push(`${formatRubParts(totalsByCurrency[curr])} ${curr}`);
+      }
+      if (summaryLines.length === 0) summaryLines.push(`${formatRubParts(totalKopecks)} RUB`);
+      const summaryHtml = summaryLines.map(l => `<div>${l}</div>`).join('');
+
+      html += `<details class="pf-group">
+        <summary class="pf-group-header">
+          <span class="pf-group-title">
+            ${typeLabels[type]}<br><span class="pf-count">${totalCount}</span>
+          </span>
+          <span class="pf-group-summary pf-group-summary-col">${summaryHtml}</span>
+        </summary>
+        <div class="pf-group-body">`;
+
+      const visibleCurrencies = currencies.filter(c => c !== '—');
+      if (visibleCurrencies.length <= 1 && !currencies.includes('—')) {
+        html += `<div class="list">${groupsByCurrency[visibleCurrencies[0]].map(p => renderPfRow(p)).join('')}</div>`;
+      } else {
+        for (const curr of currencies) {
+          const items = groupsByCurrency[curr];
+          const sum = totalsByCurrency[curr];
+          const currDisplay = (curr === '—') ? 'Без валюты' : (curr === 'RUR' ? 'RUB' : curr);
+          html += `<details class="pf-subgroup">
+            <summary class="pf-subgroup-header">
+              <span>${currDisplay}</span>
+              <span class="pf-subgroup-summary">${formatRubParts(sum)} ${currDisplay}</span>
+            </summary>
+            <div class="list">${items.map(p => renderPfRow(p)).join('')}</div>
+          </details>`;
+        }
+      }
+
+      html += `</div></details>`;
+    }
+
+    html += `</div></details>`;
+  }
+
+  el.innerHTML = html;
 }
 
 function renderPortfoliosContent(byType, filters) {
