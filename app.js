@@ -2287,6 +2287,16 @@ async function saveFuturesPositions(positions, accountId, snapshotDate) {
 async function saveReportSnapshot(importLogId, accountId, meta, parsedSec, parsedBalances) {
   const totalValueKopecks = parsedSec ? parsedSec.totalValueKopecks : null;
 
+  // Определяем дату снимка
+  let snapshotDate = null;
+  if (meta && meta.period_to) {
+    const m = meta.period_to.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+    if (m) snapshotDate = `${m[3]}-${m[2]}-${m[1]}`;
+  }
+  if (!snapshotDate) {
+    snapshotDate = new Date().toISOString().slice(0, 10);
+  }
+
   // Денежные остатки (исходящие)
   let cashRub = null, cashCny = null, cashUsd = null;
   if (parsedBalances && parsedBalances.rows) {
@@ -2300,21 +2310,46 @@ async function saveReportSnapshot(importLogId, accountId, meta, parsedSec, parse
     }
   }
 
-  await window.db.run(
-    `INSERT OR REPLACE INTO report_snapshots
-      (report_log_id, account_id, snapshot_date, broker, period_from, period_to,
-       client_name, inn, contract, subaccount_code, account_number,
-       cny_start_rate, cny_end_rate, total_value_kopecks,
-       cash_rub_kopecks, cash_cny_kopecks, cash_usd_kopecks)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      importLogId, accountId, new Date().toISOString().slice(0, 10),
-      meta.broker, meta.period_from, meta.period_to,
-      meta.client, meta.inn, meta.contract, meta.subaccount, meta.account_number,
-      meta.cny_start_rate, meta.cny_end_rate, totalValueKopecks,
-      cashRub, cashCny, cashUsd
-    ]
+  // Ищем существующий снимок за эту дату и счёт
+  const existing = await window.db.select(
+    'SELECT id FROM report_snapshots WHERE account_id = ? AND snapshot_date = ? LIMIT 1',
+    [accountId, snapshotDate]
   );
+
+  if (existing.length > 0) {
+    // Обновляем
+    await window.db.run(
+      `UPDATE report_snapshots SET
+        report_log_id = ?, broker = ?, period_from = ?, period_to = ?,
+        client_name = ?, inn = ?, contract = ?, subaccount_code = ?, account_number = ?,
+        cny_start_rate = ?, cny_end_rate = ?, total_value_kopecks = ?,
+        cash_rub_kopecks = ?, cash_cny_kopecks = ?, cash_usd_kopecks = ?
+       WHERE id = ?`,
+      [
+        importLogId, meta.broker, meta.period_from, meta.period_to,
+        meta.client, meta.inn, meta.contract, meta.subaccount, meta.account_number,
+        meta.cny_start_rate, meta.cny_end_rate, totalValueKopecks,
+        cashRub, cashCny, cashUsd, existing[0].id
+      ]
+    );
+  } else {
+    // Вставляем
+    await window.db.run(
+      `INSERT INTO report_snapshots
+        (report_log_id, account_id, snapshot_date, broker, period_from, period_to,
+         client_name, inn, contract, subaccount_code, account_number,
+         cny_start_rate, cny_end_rate, total_value_kopecks,
+         cash_rub_kopecks, cash_cny_kopecks, cash_usd_kopecks)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        importLogId, accountId, snapshotDate,
+        meta.broker, meta.period_from, meta.period_to,
+        meta.client, meta.inn, meta.contract, meta.subaccount, meta.account_number,
+        meta.cny_start_rate, meta.cny_end_rate, totalValueKopecks,
+        cashRub, cashCny, cashUsd
+      ]
+    );
+  }
 }
 
 // --- Лог импорта ---

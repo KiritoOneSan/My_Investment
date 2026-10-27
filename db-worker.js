@@ -271,7 +271,7 @@ async function initDb() {
       cash_rub_kopecks INTEGER,
       cash_cny_kopecks INTEGER,
       cash_usd_kopecks INTEGER,
-      UNIQUE(report_log_id, account_id)
+	  UNIQUE(account_id, snapshot_date)
     );
   `);
 
@@ -308,6 +308,59 @@ async function initDb() {
 
   // ===== Специальные миграции =====
 
+  // Миграция report_snapshots: правильный уникальный ключ
+  try {
+    const tblSql = db.selectObjects(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='report_snapshots'"
+    );
+    const sql = tblSql[0] ? tblSql[0].sql : '';
+    if (sql.includes('report_log_id, account_id') || sql.includes('report_log_id,account_id')) {
+      console.log('[migration] Пересоздаём report_snapshots с правильным UNIQUE');
+      db.exec(`
+        CREATE TABLE report_snapshots_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          report_log_id INTEGER NOT NULL,
+          account_id INTEGER NOT NULL,
+          snapshot_date TEXT NOT NULL,
+          broker TEXT,
+          period_from TEXT,
+          period_to TEXT,
+          client_name TEXT,
+          inn TEXT,
+          contract TEXT,
+          subaccount_code TEXT,
+          account_number TEXT,
+          cny_start_rate REAL,
+          cny_end_rate REAL,
+          total_value_kopecks INTEGER,
+          cash_rub_kopecks INTEGER,
+          cash_cny_kopecks INTEGER,
+          cash_usd_kopecks INTEGER,
+          UNIQUE(account_id, snapshot_date)
+        );
+
+        INSERT OR IGNORE INTO report_snapshots_new
+          (id, report_log_id, account_id, snapshot_date, broker, period_from, period_to,
+           client_name, inn, contract, subaccount_code, account_number,
+           cny_start_rate, cny_end_rate, total_value_kopecks,
+           cash_rub_kopecks, cash_cny_kopecks, cash_usd_kopecks)
+        SELECT
+          id, report_log_id, account_id, snapshot_date, broker, period_from, period_to,
+          client_name, inn, contract, subaccount_code, account_number,
+          cny_start_rate, cny_end_rate, total_value_kopecks,
+          cash_rub_kopecks, cash_cny_kopecks, cash_usd_kopecks
+        FROM report_snapshots;
+
+        DROP TABLE report_snapshots;
+        ALTER TABLE report_snapshots_new RENAME TO report_snapshots;
+      `);
+      console.log('[migration] report_snapshots пересоздана');
+    }
+  } catch (e) {
+    console.error('[migration] Ошибка report_snapshots:', e);
+    throw e;
+  }
+  
   // Миграция trades: убираем security_id NOT NULL, если он есть
   try {
     const tradesCols = db.selectObjects("PRAGMA table_info(trades)");
