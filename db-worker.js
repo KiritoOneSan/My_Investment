@@ -305,6 +305,8 @@ async function initDb() {
 
   ensureColumn('futures_trades', 'account_id', 'INTEGER');
   ensureColumn('futures_trades', 'market', 'TEXT');
+  
+  ensureColumn('securities', 'is_defaulted', 'INTEGER DEFAULT 0');
 
   // ===== Специальные миграции =====
 
