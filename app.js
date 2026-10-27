@@ -3759,12 +3759,11 @@ async function refreshSummary() {
 
   try {
     // ===== 1. Стоимость портфеля и валюта =====
-    // Берём последние позиции (те же, что на «Портфелях»)
     const latestPerAccount = await window.db.select(
       `SELECT account_id, MAX(snapshot_date) AS max_date
        FROM positions
        GROUP BY account_id`
-    );
+    ) || [];
 
     let latestPositions = [];
     let latestDate = null;
@@ -3774,17 +3773,16 @@ async function refreshSummary() {
         `SELECT * FROM positions
          WHERE account_id = ? AND snapshot_date = ?`,
         [la.account_id, la.max_date]
-      );
-      // Если фильтр по счёту — оставляем только этот счёт
+      ) || [];
       if (f.account && String(la.account_id) !== f.account) continue;
       latestPositions = latestPositions.concat(rows);
       if (!latestDate || la.max_date > latestDate) latestDate = la.max_date;
     }
 
-    // Исключаем дефолтные бумаги из оценки
+    // Дефолтные бумаги — исключаем из оценки
     const defaultedIsins = await window.db.select(
       "SELECT isin FROM securities WHERE is_defaulted = 1"
-    );
+    ) || [];
     const defaultedSet = new Set(defaultedIsins.map(x => x.isin));
 
     let secValue = 0;
@@ -3793,7 +3791,7 @@ async function refreshSummary() {
       if (p.value_rub_kopecks != null) secValue += p.value_rub_kopecks;
     }
 
-    // Деньги
+    // Деньги — из последних report_snapshots по каждому счёту
     const latestReports = await window.db.select(
       `SELECT rs.*
        FROM report_snapshots rs
@@ -3802,81 +3800,89 @@ async function refreshSummary() {
          FROM report_snapshots
          GROUP BY account_id
        ) latest ON latest.account_id = rs.account_id AND latest.max_date = rs.snapshot_date`
-    );
+    ) || [];
 
     let cashRub = 0, cashCny = 0, cashUsd = 0;
-    let latestReportDate = null;
     for (const r of latestReports) {
       if (f.account && String(r.account_id) !== f.account) continue;
       if (r.cash_rub_kopecks != null) cashRub += r.cash_rub_kopecks;
       if (r.cash_cny_kopecks != null) cashCny += r.cash_cny_kopecks;
       if (r.cash_usd_kopecks != null) cashUsd += r.cash_usd_kopecks;
-      if (!latestReportDate || r.snapshot_date > latestReportDate) latestReportDate = r.snapshot_date;
     }
 
     const totalValue = secValue + cashRub + cashCny + cashUsd;
-    document.getElementById('smTotalValue').textContent = formatRubParts(totalValue) + ' RUB';
+    const totalEl = document.getElementById('smTotalValue');
+    if (totalEl) totalEl.textContent = formatRubParts(totalValue) + ' RUB';
 
-    // Изменение считаем от начала текущего года до последнего снимка
+    // ===== Изменение: от конца прошлого года до последнего снимка =====
     const now = new Date();
-    const yearStart = `${now.getFullYear()}-01-01`;
+    const lastYearEnd = `${now.getFullYear() - 1}-12-31`;
 
-    const startSnapshot = await window.db.select(
-      `SELECT SUM(total_with_cash_kopecks) AS total
-       FROM portfolio_snapshots
-       WHERE snapshot_date = (
-         SELECT MAX(snapshot_date) FROM portfolio_snapshots WHERE snapshot_date < ?
-       )
-       ${f.account ? 'AND account_id = ?' : ''}`,
-      f.account ? [yearStart, Number(f.account)] : [yearStart]
-    );
+    let startRows = [];
+    let endRows = [];
+    try {
+      startRows = await window.db.select(
+        `SELECT COALESCE(SUM(total_with_cash_kopecks), 0) AS total
+         FROM portfolio_snapshots
+         WHERE snapshot_date = (
+           SELECT MAX(snapshot_date) FROM portfolio_snapshots WHERE snapshot_date <= ?
+         )
+         ${f.account ? 'AND account_id = ?' : ''}`,
+        f.account ? [lastYearEnd, Number(f.account)] : [lastYearEnd]
+      ) || [];
+      endRows = await window.db.select(
+        `SELECT COALESCE(SUM(total_with_cash_kopecks), 0) AS total
+         FROM portfolio_snapshots
+         WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM portfolio_snapshots)
+         ${f.account ? 'AND account_id = ?' : ''}`,
+        f.account ? [Number(f.account)] : []
+      ) || [];
+    } catch (e) {
+      console.warn('[summary] Ошибка при запросе снимков:', e);
+    }
 
-    const endSnapshot = await window.db.select(
-      `SELECT SUM(total_with_cash_kopecks) AS total
-       FROM portfolio_snapshots
-       WHERE snapshot_date = (
-         SELECT MAX(snapshot_date) FROM portfolio_snapshots
-       )
-       ${f.account ? 'AND account_id = ?' : ''}`,
-      f.account ? [Number(f.account)] : []
-    );
-
-    const startSum = (startSnapshot[0] && startSnapshot[0].total) || 0;
-    const endSum = (endSnapshot[0] && endSnapshot[0].total) || 0;
+    const startSum = Number((startRows[0] && startRows[0].total) || 0);
+    const endSum = Number((endRows[0] && endRows[0].total) || 0);
     const diff = endSum - startSum;
     const pct = startSum > 0 ? (diff / startSum * 100) : 0;
 
     const changeEl = document.getElementById('smChange');
-    if (startSum > 0) {
-      if (diff === 0) {
-        changeEl.textContent = `Без изменений с начала года`;
-        changeEl.className = 'change';
+    if (changeEl) {
+      if (startSum > 0 && endSum > 0) {
+        if (diff === 0) {
+          changeEl.textContent = `Без изменений с конца ${now.getFullYear() - 1}`;
+          changeEl.className = 'change';
+        } else {
+          const sign = diff > 0 ? '+' : '';
+          const pctSign = pct > 0 ? '+' : '';
+          changeEl.textContent = `С конца ${now.getFullYear() - 1}: ${sign}${formatRubParts(diff)} RUB (${pctSign}${pct.toFixed(2)}%)`;
+          changeEl.className = 'change ' + (diff > 0 ? 'positive' : 'negative');
+        }
       } else {
-        const sign = diff > 0 ? '+' : '';
-        const pctSign = pct > 0 ? '+' : '';
-        changeEl.textContent = `С начала ${now.getFullYear()}: ${sign}${formatRubParts(diff)} RUB (${pctSign}${pct.toFixed(2)}%)`;
-        changeEl.className = 'change ' + (diff > 0 ? 'positive' : 'negative');
+        changeEl.textContent = `Для расчёта изменения нужен отчёт за конец ${now.getFullYear() - 1} года`;
+        changeEl.className = 'change';
       }
-    } else {
-      changeEl.textContent = 'Нет данных на начало года для сравнения';
-      changeEl.className = 'change';
     }
-	
+
     // 3 колонки по валютам
-    document.getElementById('smCurrencyRUB').textContent = formatRubParts(cashRub);
-    document.getElementById('smCurrencyCNY').textContent = formatRubParts(cashCny);
-    document.getElementById('smCurrencyUSD').textContent = formatRubParts(cashUsd);
+    const rubEl = document.getElementById('smCurrencyRUB');
+    if (rubEl) rubEl.textContent = formatRubParts(cashRub);
+    const cnyEl = document.getElementById('smCurrencyCNY');
+    if (cnyEl) cnyEl.textContent = formatRubParts(cashCny);
+    const usdEl = document.getElementById('smCurrencyUSD');
+    if (usdEl) usdEl.textContent = formatRubParts(cashUsd);
 
     // ===== 2. Доходы за период =====
-    // Период берём из фильтра. Если пустой — за всё время
     const periodFrom = f.from || '1900-01-01';
     const periodTo = f.to || '2999-12-31';
 
     const titleEl = document.getElementById('smPeriodTitle');
-    if (f.from && f.to) titleEl.textContent = `Доходы с ${f.from} по ${f.to}`;
-    else if (f.from) titleEl.textContent = `Доходы с ${f.from}`;
-    else if (f.to) titleEl.textContent = `Доходы по ${f.to}`;
-    else titleEl.textContent = 'Доходы за всё время';
+    if (titleEl) {
+      if (f.from && f.to) titleEl.textContent = `Доходы с ${f.from} по ${f.to}`;
+      else if (f.from) titleEl.textContent = `Доходы с ${f.from}`;
+      else if (f.to) titleEl.textContent = `Доходы по ${f.to}`;
+      else titleEl.textContent = 'Доходы за всё время';
+    }
 
     let sqlWhere = 'WHERE operation_date >= ? AND operation_date <= ?';
     const sqlParams = [periodFrom, periodTo];
@@ -3886,11 +3892,11 @@ async function refreshSummary() {
     }
 
     const ops = await window.db.select(
-      `SELECT operation_type, amount_kopecks FROM cash_operations ${sqlWhere}`,
+      `SELECT operation_type, amount_kopecks, currency FROM cash_operations ${sqlWhere}`,
       sqlParams
-    );
+    ) || [];
 
-        let couponsRub = 0, couponsCny = 0;
+    let couponsRub = 0, couponsCny = 0;
     let dividendsRub = 0;
     let expensesRub = 0;
     let taxRub = 0;
@@ -3908,34 +3914,54 @@ async function refreshSummary() {
       else if (type.includes('ндфл') || type.includes('налог')) taxRub += amount;
     }
 
-    // Отображаем купоны раздельно
-    let couponsLabel = formatRubParts(couponsRub) + ' RUB';
-    if (couponsCny !== 0) couponsLabel += ` + ${formatRubParts(couponsCny)} CNY`;
-    document.getElementById('smCoupons').textContent = couponsLabel;
+    // Купоны — раздельно по валютам
+    const couponsEl = document.getElementById('smCoupons');
+    if (couponsEl) {
+      let couponsLabel = formatRubParts(couponsRub) + ' RUB';
+      if (couponsCny !== 0) couponsLabel += ` + ${formatRubParts(couponsCny)} CNY`;
+      couponsEl.textContent = couponsLabel;
+    }
 
-    document.getElementById('smDividends').textContent = formatRubParts(dividendsRub) + ' RUB';
-    document.getElementById('smExpenses').textContent = formatRubParts(expensesRub) + ' RUB';
-    document.getElementById('smPnL').textContent = '— (нужен FIFO)';
+    const divEl = document.getElementById('smDividends');
+    if (divEl) divEl.textContent = formatRubParts(dividendsRub) + ' RUB';
 
-    // Итоги — пересчитываем купоны CNY в RUB по текущему курсу
-    // Для простоты используем текущий курс из настроек (или курс из последнего отчёта)
-    const cnyRate = (pfState.reportSnapshots[0] && pfState.reportSnapshots[0].cny_end_rate) || 11.5;
+    const expEl = document.getElementById('smExpenses');
+    if (expEl) expEl.textContent = formatRubParts(expensesRub) + ' RUB';
+
+    const pnlEl = document.getElementById('smPnL');
+    if (pnlEl) pnlEl.textContent = '— (нужен FIFO)';
+
+    // Итоги — купоны CNY пересчитываем в RUB по курсу из последнего отчёта
+    const cnyRate = (pfState.reportSnapshots && pfState.reportSnapshots[0] && pfState.reportSnapshots[0].cny_end_rate) || 11.5;
     const couponsCnyInRub = Math.round(couponsCny * cnyRate);
     const couponsTotalRub = couponsRub + couponsCnyInRub;
 
     const incomeTotal = couponsTotalRub + dividendsRub;
     const netTotal = incomeTotal + expensesRub + taxRub;
 
-    document.getElementById('smIncomeTotal').textContent = formatRubParts(incomeTotal) + ' RUB';
-    document.getElementById('smExpenseTotal').textContent = formatRubParts(expensesRub) + ' RUB';
-    document.getElementById('smTaxTotal').textContent = formatRubParts(taxRub) + ' RUB';
-    netEl.className = netTotal >= 0 ? 'positive' : 'negative';
+    const incEl = document.getElementById('smIncomeTotal');
+    if (incEl) incEl.textContent = formatRubParts(incomeTotal) + ' RUB';
+
+    const expTotEl = document.getElementById('smExpenseTotal');
+    if (expTotEl) expTotEl.textContent = formatRubParts(expensesRub) + ' RUB';
+
+    const taxEl = document.getElementById('smTaxTotal');
+    if (taxEl) taxEl.textContent = formatRubParts(taxRub) + ' RUB';
+
+    const netEl = document.getElementById('smNetTotal');
+    if (netEl) {
+      netEl.textContent = formatRubParts(netTotal) + ' RUB';
+      netEl.className = netTotal >= 0 ? 'positive' : 'negative';
+    }
 
     // ===== 3. Календарь =====
-    document.getElementById('smPaymentsFixed').textContent = '—';
-    document.getElementById('smPaymentsFloating').textContent = '—';
+    const fixedEl = document.getElementById('smPaymentsFixed');
+    if (fixedEl) fixedEl.textContent = '—';
+    const floatEl = document.getElementById('smPaymentsFloating');
+    if (floatEl) floatEl.textContent = '—';
 
-    document.getElementById('smWarning').style.display = 'none';
+    const warnEl = document.getElementById('smWarning');
+    if (warnEl) warnEl.style.display = 'none';
 
   } catch (err) {
     console.error('[summary] Ошибка:', err);
