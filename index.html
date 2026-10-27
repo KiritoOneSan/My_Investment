@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'">
   <meta name="theme-color" content="#0d6e4f">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=53">
+  <link rel="stylesheet" href="style.css?v=54">
   <title>Инвестиции</title>
 </head>
 <body>
@@ -86,7 +86,11 @@
       <div class="card big-value">
         <div class="label">Стоимость портфеля</div>
         <div class="value" id="smTotalValue">—</div>
-        <div class="change" id="smChange">—</div>
+      </div>
+
+      <div class="card" id="smProfitCard">
+        <div class="import-row"><span>Прибыль за период</span><span id="smProfit" class="positive">—</span></div>
+        <div class="import-note" style="margin-top: 6px;">Без учёта пополнений/выводов. Купоны + дивиденды − издержки − налоги.</div>
       </div>
 
       <div class="currency-grid">
@@ -429,7 +433,7 @@
   </nav>
 
   <script src="lib/xlsx.full.min.js"></script>
-  <script src="db.js?v=53"></script>
-  <script src="app.js?v=53"></script>
+  <script src="db.js?v=54"></script>
+  <script src="app.js?v=54"></script>
 </body>
 </html>

@@ -3880,56 +3880,9 @@ async function refreshSummary() {
     const totalEl = document.getElementById('smTotalValue');
     if (totalEl) totalEl.textContent = formatRubParts(totalValue) + ' RUB';
 
-    // ===== Изменение: от конца прошлого года до последнего снимка =====
-    const now = new Date();
-    const lastYearEnd = `${now.getFullYear() - 1}-12-31`;
-
-    let startRows = [];
-    let endRows = [];
-    try {
-      startRows = await window.db.select(
-        `SELECT COALESCE(SUM(total_with_cash_kopecks), 0) AS total
-         FROM portfolio_snapshots
-         WHERE snapshot_date = (
-           SELECT MAX(snapshot_date) FROM portfolio_snapshots WHERE snapshot_date <= ?
-         )
-         ${f.account ? 'AND account_id = ?' : ''}`,
-        f.account ? [lastYearEnd, Number(f.account)] : [lastYearEnd]
-      ) || [];
-      endRows = await window.db.select(
-        `SELECT COALESCE(SUM(total_with_cash_kopecks), 0) AS total
-         FROM portfolio_snapshots
-         WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM portfolio_snapshots)
-         ${f.account ? 'AND account_id = ?' : ''}`,
-        f.account ? [Number(f.account)] : []
-      ) || [];
-    } catch (e) {
-      console.warn('[summary] Ошибка при запросе снимков:', e);
-    }
-
-    const startSum = Number((startRows[0] && startRows[0].total) || 0);
-    const endSum = Number((endRows[0] && endRows[0].total) || 0);
-    const diff = endSum - startSum;
-    const pct = startSum > 0 ? (diff / startSum * 100) : 0;
-
-    const changeEl = document.getElementById('smChange');
-    if (changeEl) {
-      if (startSum > 0 && endSum > 0) {
-        if (diff === 0) {
-          changeEl.textContent = `Без изменений с конца ${now.getFullYear() - 1}`;
-          changeEl.className = 'change';
-        } else {
-          const sign = diff > 0 ? '+' : '';
-          const pctSign = pct > 0 ? '+' : '';
-          changeEl.textContent = `С конца ${now.getFullYear() - 1}: ${sign}${formatRubParts(diff)} RUB (${pctSign}${pct.toFixed(2)}%)`;
-          changeEl.className = 'change ' + (diff > 0 ? 'positive' : 'negative');
-        }
-      } else {
-        changeEl.textContent = `Для расчёта изменения нужен отчёт за конец ${now.getFullYear() - 1} года`;
-        changeEl.className = 'change';
-      }
-    }
-
+    // ===== Прибыль за период: купоны + дивиденды - издержки - налоги =====
+    // Считаем ниже, после расчёта доходов.
+	
     // 3 колонки по валютам
     const rubEl = document.getElementById('smCurrencyRUB');
     if (rubEl) rubEl.textContent = formatRubParts(cashRub);
@@ -3997,13 +3950,13 @@ async function refreshSummary() {
     const pnlEl = document.getElementById('smPnL');
     if (pnlEl) pnlEl.textContent = '— (нужен FIFO)';
 
-    // Итоги — купоны CNY пересчитываем в RUB по курсу из последнего отчёта
+    // Итоги
     const cnyRate = (pfState.reportSnapshots && pfState.reportSnapshots[0] && pfState.reportSnapshots[0].cny_end_rate) || 11.5;
     const couponsCnyInRub = Math.round(couponsCny * cnyRate);
     const couponsTotalRub = couponsRub + couponsCnyInRub;
 
     const incomeTotal = couponsTotalRub + dividendsRub;
-    const netTotal = incomeTotal + expensesRub + taxRub;
+    const profitTotal = incomeTotal + expensesRub + taxRub; // издержки и налог отрицательные
 
     const incEl = document.getElementById('smIncomeTotal');
     if (incEl) incEl.textContent = formatRubParts(incomeTotal) + ' RUB';
@@ -4016,8 +3969,15 @@ async function refreshSummary() {
 
     const netEl = document.getElementById('smNetTotal');
     if (netEl) {
-      netEl.textContent = formatRubParts(netTotal) + ' RUB';
-      netEl.className = netTotal >= 0 ? 'positive' : 'negative';
+      netEl.textContent = formatRubParts(profitTotal) + ' RUB';
+      netEl.className = profitTotal >= 0 ? 'positive' : 'negative';
+    }
+
+    // Прибыль за период — в большой карточке под стоимостью портфеля
+    const profitEl = document.getElementById('smProfit');
+    if (profitEl) {
+      profitEl.textContent = formatRubParts(profitTotal) + ' RUB';
+      profitEl.className = profitTotal >= 0 ? 'positive' : 'negative';
     }
 
     // ===== 3. Календарь =====
